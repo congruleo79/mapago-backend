@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mapago-backend",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-20",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mapago-backend",
+      "database_id": "c11e1be1-cfc2-456e-9175-8e2727788106",
+      "migrations_dir": "migrations",
+    },
+  ],
+}
