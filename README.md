@@ -47,7 +47,7 @@ Notes:
 - The 5th guess auto-finalizes the play.
 - Leaderboard only shows finalized plays.
 - Social guesses are only visible after the viewer has submitted at least one guess for today's game.
-- Today's game can only be reseeded before any play exists.
+- Any dated game can only be reseeded before any play exists for that date.
 
 ## Common shapes
 
@@ -500,9 +500,9 @@ Possible errors:
 
 ## Admin endpoint
 
-### `POST /admin/games/today/seed`
+### `POST /admin/games/:date/seed`
 
-Creates or replaces today's game.
+Creates or replaces the game for a specific date.
 
 Authentication:
 
@@ -522,7 +522,14 @@ Rules:
 - locations are stored in the order they are sent
 - URLs must be `http` or `https`
 - `isoCountryCode` must be a 2-letter uppercase code
-- reseeding is blocked once any play exists for today's game
+- `:date` must use `YYYY-MM-DD`
+- reseeding is blocked once any play exists for that game date
+
+Example path:
+
+```http
+POST /admin/games/2026-07-25/seed
+```
 
 Request body:
 
@@ -565,7 +572,7 @@ Request body:
 }
 ```
 
-Response `201` when today's game is created, `200` when today's empty game is replaced:
+Response `201` when the dated game is created, `200` when an empty game for that date is replaced:
 
 ```json
 {
@@ -597,7 +604,7 @@ Possible errors:
 
 - `400` invalid payload
 - `401` missing or invalid admin token
-- `409` if today's game already has plays
+- `409` if that game date already has plays
 - `500` if `ADMIN_SEED_TOKEN` is not configured
 
 ## Suggested frontend integration order

@@ -125,10 +125,11 @@ export default {
         return json({ ok: true })
       }
 
-      if (request.method === "POST" && pathname === "/admin/games/today/seed") {
+      if (request.method === "POST" && pathname.match(/^\/admin\/games\/\d{4}-\d{2}-\d{2}\/seed$/)) {
         await requireAdminSeedToken(request, env)
+        const gameDate = pathname.split("/")[3] as string
         const body = await readJson<SeedTodayGameInput>(request)
-        const result = await seedTodayGame(env, body)
+        const result = await seedGameForDate(env, gameDate, body)
         return withCors(json(result, result.created ? 201 : 200))
       }
 
@@ -383,22 +384,26 @@ async function requireAdminSeedToken(request: Request, env: AppEnv) {
   }
 }
 
-async function seedTodayGame(env: AppEnv, body: SeedTodayGameInput) {
+async function seedGameForDate(env: AppEnv, gameDate: string, body: SeedTodayGameInput) {
   const normalized = normalizeSeedTodayGameInput(body)
-  const today = currentUtcDate()
+  const normalizedGameDate = normalizeGameDate(gameDate)
 
   let created = false
-  let game = await first<{ id: number; public_id: string }>(env.DB.prepare(`SELECT id, public_id FROM games WHERE game_date = ?`).bind(today))
+  let game = await first<{ id: number; public_id: string }>(env.DB.prepare(`SELECT id, public_id FROM games WHERE game_date = ?`).bind(normalizedGameDate))
 
   if (game) {
     const existingPlay = await first<{ id: number }>(env.DB.prepare(`SELECT id FROM plays WHERE game_id = ? LIMIT 1`).bind(game.id))
     if (existingPlay) {
-      throw httpError(409, "Cannot reseed today's game after players have started")
+      throw httpError(409, `Cannot reseed game ${normalizedGameDate} after players have started`)
     }
   } else {
     created = true
-    await env.DB.prepare(`INSERT INTO games (public_id, game_date, name) VALUES (?, ?, ?)`).bind(createPublicId("gam"), today, normalized.name).run()
-    game = requireFound(await first<{ id: number; public_id: string }>(env.DB.prepare(`SELECT id, public_id FROM games WHERE game_date = ?`).bind(today)), 500, "Failed to create today's game")
+    await env.DB.prepare(`INSERT INTO games (public_id, game_date, name) VALUES (?, ?, ?)`).bind(createPublicId("gam"), normalizedGameDate, normalized.name).run()
+    game = requireFound(
+      await first<{ id: number; public_id: string }>(env.DB.prepare(`SELECT id, public_id FROM games WHERE game_date = ?`).bind(normalizedGameDate)),
+      500,
+      `Failed to create game ${normalizedGameDate}`,
+    )
   }
 
   const statements: D1PreparedStatement[] = [
@@ -442,7 +447,7 @@ async function seedTodayGame(env: AppEnv, body: SeedTodayGameInput) {
 
   await env.DB.batch(statements)
 
-  const seededGame = requireFound(await getCurrentGame(env), 500, "Failed to load seeded game")
+  const seededGame = requireFound(await getGameByDate(env, normalizedGameDate), 500, `Failed to load game ${normalizedGameDate}`)
   return {
     created,
     game: {
@@ -454,7 +459,7 @@ async function seedTodayGame(env: AppEnv, body: SeedTodayGameInput) {
   }
 }
 
-async function getCurrentGame(env: AppEnv) {
+async function getGameByDate(env: AppEnv, gameDate: string) {
   const rows = await all<GameWithLocationRow>(
     env.DB.prepare(
       `SELECT
@@ -476,9 +481,9 @@ async function getCurrentGame(env: AppEnv) {
         l.page_views
       FROM games g
       JOIN locations l ON l.game_id = g.id
-      WHERE g.game_date = date('now')
+      WHERE g.game_date = ?
       ORDER BY l.ordinal ASC`,
-    ),
+    ).bind(gameDate),
   )
 
   if (rows.length === 0) {
@@ -504,6 +509,10 @@ async function getCurrentGame(env: AppEnv) {
       pageViews: row.page_views,
     })),
   }
+}
+
+async function getCurrentGame(env: AppEnv) {
+  return getGameByDate(env, currentUtcDate())
 }
 
 async function requireCurrentGame(env: AppEnv) {
@@ -854,6 +863,19 @@ function normalizeSeedTodayGameInput(body: SeedTodayGameInput) {
     name: normalizeOptionalText(body.name, 100),
     locations: body.locations.map((location, index) => normalizeSeedLocation(location, index + 1)),
   }
+}
+
+function normalizeGameDate(gameDate: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(gameDate)) {
+    throw httpError(400, "Game date must use YYYY-MM-DD")
+  }
+
+  const parsed = new Date(`${gameDate}T00:00:00.000Z`)
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== gameDate) {
+    throw httpError(400, "Game date must be a valid calendar date")
+  }
+
+  return gameDate
 }
 
 function normalizeSeedLocation(location: SeedLocationInput, ordinal: number) {
