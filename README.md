@@ -369,9 +369,13 @@ Possible errors:
 - `409` guess already submitted for that location
 - `409` play already finalized
 
-### `POST /follows/:userPublicId`
+### `POST /follows/:handle`
 
 Creates a follow relationship.
+
+Path params:
+
+- `handle`: the target user's handle
 
 Request body: none
 
@@ -381,7 +385,7 @@ Response `201`:
 {
   "follow": {
     "publicId": "fol_...",
-    "followedUserId": "usr_..."
+    "followedUserHandle": "friend_one"
   }
 }
 ```
@@ -395,6 +399,32 @@ Possible errors:
 
 - `400` if the user tries to follow themself
 - `404` if the target user does not exist
+
+### `DELETE /follows/:handle`
+
+Deletes a follow relationship by target user handle.
+
+Path params:
+
+- `handle`: the target user's handle
+
+Request body: none
+
+Response `200`:
+
+```json
+{
+  "unfollow": {
+    "publicId": "fol_...",
+    "followedUserHandle": "friend_one"
+  }
+}
+```
+
+Possible errors:
+
+- `404` if the target user does not exist
+- `404` if there is no follow relationship to delete
 
 ### `GET /follows`
 

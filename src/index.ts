@@ -125,7 +125,7 @@ const SESSION_PREFIX = "Bearer "
 const ADMIN_TOKEN_HEADER = "x-admin-token"
 const SESSION_DURATION_DAYS = 365
 const MAX_LOCATION_SCORE = 5000
-const PASSWORD_ITERATIONS = 600000
+const PASSWORD_ITERATIONS = 100000
 
 export default {
   async fetch(request: Request, env: AppEnv): Promise<Response> {
@@ -195,9 +195,16 @@ export default {
 
       if (request.method === "POST" && pathname.match(/^\/follows\/[a-z0-9_]+$/)) {
         const session = await requireSession(request, env)
-        const followedUserPublicId = pathname.split("/").at(-1) as string
-        const follow = await createFollow(env, session.user.id, followedUserPublicId)
+        const followedUserHandle = pathname.split("/").at(-1) as string
+        const follow = await createFollow(env, session.user.id, followedUserHandle)
         return withCors(json({ follow }, 201))
+      }
+
+      if (request.method === "DELETE" && pathname.match(/^\/follows\/[a-z0-9_]+$/)) {
+        const session = await requireSession(request, env)
+        const followedUserHandle = pathname.split("/").at(-1) as string
+        const unfollow = await deleteFollow(env, session.user.id, followedUserHandle)
+        return withCors(json({ unfollow }))
       }
 
       if (request.method === "GET" && pathname === "/follows") {
@@ -655,8 +662,9 @@ async function createGuess(env: AppEnv, userId: number, ordinal: number, latitud
   }
 }
 
-async function createFollow(env: AppEnv, followerUserId: number, followedUserPublicId: string) {
-  const followed = await first<UserRow>(env.DB.prepare(`SELECT * FROM users WHERE public_id = ?`).bind(followedUserPublicId))
+async function createFollow(env: AppEnv, followerUserId: number, followedUserHandle: string) {
+  const normalizedHandle = normalizeHandle(followedUserHandle)
+  const followed = await first<UserRow>(env.DB.prepare(`SELECT * FROM users WHERE handle = ?`).bind(normalizedHandle))
 
   if (!followed) {
     throw httpError(404, "User not found")
@@ -669,13 +677,35 @@ async function createFollow(env: AppEnv, followerUserId: number, followedUserPub
   const existing = await first<{ public_id: string }>(env.DB.prepare(`SELECT public_id FROM follows WHERE follower_user_id = ? AND followed_user_id = ?`).bind(followerUserId, followed.id))
 
   if (existing) {
-    return { publicId: existing.public_id, followedUserId: followed.public_id }
+    return { publicId: existing.public_id, followedUserHandle: followed.handle }
   }
 
   const publicId = createPublicId("fol")
   await env.DB.prepare(`INSERT INTO follows (public_id, follower_user_id, followed_user_id) VALUES (?, ?, ?)`).bind(publicId, followerUserId, followed.id).run()
 
-  return { publicId, followedUserId: followed.public_id }
+  return { publicId, followedUserHandle: followed.handle }
+}
+
+async function deleteFollow(env: AppEnv, followerUserId: number, followedUserHandle: string) {
+  const normalizedHandle = normalizeHandle(followedUserHandle)
+  const followed = await first<UserRow>(env.DB.prepare(`SELECT * FROM users WHERE handle = ?`).bind(normalizedHandle))
+
+  if (!followed) {
+    throw httpError(404, "User not found")
+  }
+
+  const existing = await first<{ public_id: string }>(env.DB.prepare(`SELECT public_id FROM follows WHERE follower_user_id = ? AND followed_user_id = ?`).bind(followerUserId, followed.id))
+
+  if (!existing) {
+    throw httpError(404, "Follow not found")
+  }
+
+  await env.DB.prepare(`DELETE FROM follows WHERE follower_user_id = ? AND followed_user_id = ?`).bind(followerUserId, followed.id).run()
+
+  return {
+    publicId: existing.public_id,
+    followedUserHandle: followed.handle,
+  }
 }
 
 async function listFollows(env: AppEnv, followerUserId: number) {
@@ -1234,7 +1264,7 @@ function jsonError(error: string, status: number) {
 function withCors(response: Response) {
   const headers = new Headers(response.headers)
   headers.set("access-control-allow-origin", "*")
-  headers.set("access-control-allow-methods", "GET,POST,PATCH,OPTIONS")
+  headers.set("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS")
   headers.set("access-control-allow-headers", "authorization,content-type,x-admin-token")
   return new Response(response.body, {
     status: response.status,
