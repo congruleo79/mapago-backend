@@ -675,15 +675,29 @@ async function createFollow(env: AppEnv, followerUserId: number, followedUserHan
   }
 
   const existing = await first<{ public_id: string }>(env.DB.prepare(`SELECT public_id FROM follows WHERE follower_user_id = ? AND followed_user_id = ?`).bind(followerUserId, followed.id))
+  const reciprocal = await first<{ public_id: string }>(env.DB.prepare(`SELECT public_id FROM follows WHERE follower_user_id = ? AND followed_user_id = ?`).bind(followed.id, followerUserId))
 
-  if (existing) {
-    return { publicId: existing.public_id, followedUserHandle: followed.handle }
+  if (existing && reciprocal) {
+    return { publicId: existing.public_id, followedUserHandle: followed.handle, mutual: true }
   }
 
-  const publicId = createPublicId("fol")
-  await env.DB.prepare(`INSERT INTO follows (public_id, follower_user_id, followed_user_id) VALUES (?, ?, ?)`).bind(publicId, followerUserId, followed.id).run()
+  const statements: D1PreparedStatement[] = []
+  const publicId = existing?.public_id ?? createPublicId("fol")
+  const reciprocalPublicId = reciprocal?.public_id ?? createPublicId("fol")
 
-  return { publicId, followedUserHandle: followed.handle }
+  if (!existing) {
+    statements.push(env.DB.prepare(`INSERT INTO follows (public_id, follower_user_id, followed_user_id) VALUES (?, ?, ?)`).bind(publicId, followerUserId, followed.id))
+  }
+
+  if (!reciprocal) {
+    statements.push(env.DB.prepare(`INSERT INTO follows (public_id, follower_user_id, followed_user_id) VALUES (?, ?, ?)`).bind(reciprocalPublicId, followed.id, followerUserId))
+  }
+
+  if (statements.length > 0) {
+    await env.DB.batch(statements)
+  }
+
+  return { publicId, followedUserHandle: followed.handle, mutual: true }
 }
 
 async function deleteFollow(env: AppEnv, followerUserId: number, followedUserHandle: string) {
@@ -705,6 +719,7 @@ async function deleteFollow(env: AppEnv, followerUserId: number, followedUserHan
   return {
     publicId: existing.public_id,
     followedUserHandle: followed.handle,
+    mutual: false,
   }
 }
 

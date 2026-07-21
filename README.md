@@ -371,7 +371,7 @@ Possible errors:
 
 ### `POST /follows/:handle`
 
-Creates a follow relationship.
+Creates a mutual follow relationship.
 
 Path params:
 
@@ -385,14 +385,16 @@ Response `201`:
 {
   "follow": {
     "publicId": "fol_...",
-    "followedUserHandle": "friend_one"
+    "followedUserHandle": "friend_one",
+    "mutual": true
   }
 }
 ```
 
 Notes:
 
-- If the follow already exists, the endpoint still returns a follow object.
+- This endpoint creates both rows: `me -> friend` and `friend -> me`.
+- If one or both rows already exist, the endpoint repairs the pair and still returns a follow object.
 - The endpoint currently still responds with `201` even when the relationship already existed.
 
 Possible errors:
@@ -402,7 +404,7 @@ Possible errors:
 
 ### `DELETE /follows/:handle`
 
-Deletes a follow relationship by target user handle.
+Deletes only the current user's follow row for the target user handle.
 
 Path params:
 
@@ -416,10 +418,16 @@ Response `200`:
 {
   "unfollow": {
     "publicId": "fol_...",
-    "followedUserHandle": "friend_one"
+    "followedUserHandle": "friend_one",
+    "mutual": false
   }
 }
 ```
+
+Notes:
+
+- This endpoint removes only `me -> friend`.
+- The reciprocal row `friend -> me` is left untouched.
 
 Possible errors:
 
