@@ -75,6 +75,22 @@ type SocialGuessRow = LeaderboardRow & {
   score: number
 }
 
+type SocialLocationGuessRow = {
+  play_public_id: string
+  total_score: number
+  finalized_at: string
+  user_public_id: string
+  handle: string
+  display_name: string
+  location_public_id: string
+  ordinal: number
+  guess_public_id: string
+  guess_latitude: number
+  guess_longitude: number
+  distance_meters: number
+  score: number
+}
+
 type SessionWithUserRow = SessionRow & {
   handle: string
   display_name: string
@@ -202,6 +218,14 @@ export default {
         const game = await requireCurrentGame(env)
         const social = await getSocialGuesses(env, game.game_id, session.user.id)
         return withCors(json({ game: summarizeGame(game), plays: social }))
+      }
+
+      if (request.method === "GET" && pathname.match(/^\/games\/today\/social\/\d+$/)) {
+        const session = await requireSession(request, env)
+        const ordinal = Number(pathname.split("/").at(-1))
+        const game = await requireCurrentGame(env)
+        const social = await getSocialGuessesForOrdinal(env, game.game_id, session.user.id, ordinal)
+        return withCors(json({ game: summarizeGame(game), location: social.location, guesses: social.guesses }))
       }
 
       return withCors(jsonError("Not found", 404))
@@ -802,6 +826,86 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
   }
 
   return Array.from(grouped.values())
+}
+
+async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: number, ordinal: number) {
+  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 5) {
+    throw httpError(400, "Location ordinal must be between 1 and 5")
+  }
+
+  const viewerGuess = await first<{ id: number }>(
+    env.DB.prepare(
+      `SELECT g.id
+       FROM plays p
+       JOIN guesses g ON g.play_id = p.id
+       JOIN locations l ON l.id = g.location_id
+       WHERE p.game_id = ? AND p.user_id = ? AND l.ordinal = ?
+       LIMIT 1`,
+    ).bind(gameId, userId, ordinal),
+  )
+
+  if (!viewerGuess) {
+    throw httpError(403, "Submit your guess for this location before viewing social guesses")
+  }
+
+  const rows = await all<SocialLocationGuessRow>(
+    env.DB.prepare(
+      `SELECT
+        p.public_id AS play_public_id,
+        p.total_score,
+        p.finalized_at,
+        u.public_id AS user_public_id,
+        u.handle,
+        u.display_name,
+        l.public_id AS location_public_id,
+        l.ordinal,
+        g.public_id AS guess_public_id,
+        g.guess_latitude,
+        g.guess_longitude,
+        g.distance_meters,
+        g.score
+       FROM follows f
+       JOIN plays p ON p.user_id = f.followed_user_id AND p.game_id = ?
+       JOIN users u ON u.id = p.user_id
+       JOIN guesses g ON g.play_id = p.id
+       JOIN locations l ON l.id = g.location_id
+       WHERE f.follower_user_id = ? AND l.ordinal = ?
+       ORDER BY u.handle ASC`,
+    ).bind(gameId, userId, ordinal),
+  )
+
+  const location = await first<{ public_id: string; ordinal: number; name: string }>(
+    env.DB.prepare(`SELECT public_id, ordinal, name FROM locations WHERE game_id = ? AND ordinal = ?`).bind(gameId, ordinal),
+  )
+
+  if (!location) {
+    throw httpError(404, "Location not found")
+  }
+
+  return {
+    location: {
+      publicId: location.public_id,
+      ordinal: location.ordinal,
+      name: location.name,
+    },
+    guesses: rows.map((row) => ({
+      playPublicId: row.play_public_id,
+      totalScore: row.total_score,
+      finalizedAt: row.finalized_at,
+      user: {
+        publicId: row.user_public_id,
+        handle: row.handle,
+        displayName: row.display_name,
+      },
+      guess: {
+        publicId: row.guess_public_id,
+        latitude: row.guess_latitude,
+        longitude: row.guess_longitude,
+        distanceMeters: row.distance_meters,
+        score: row.score,
+      },
+    })),
+  }
 }
 
 function serializeUser(user: UserRow) {

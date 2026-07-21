@@ -47,6 +47,7 @@ Notes:
 - The 5th guess auto-finalizes the play.
 - Leaderboard only shows finalized plays.
 - Social guesses are only visible after the viewer has submitted at least one guess for today's game.
+- Location-specific social guesses are only visible after the viewer has submitted their own guess for that same location.
 - Any dated game can only be reseeded before any play exists for that date.
 
 ## Common shapes
@@ -498,11 +499,67 @@ Possible errors:
 - `403` if the viewer has not made any guess yet
 - `404` if no game exists for today
 
+### `GET /games/today/social/:ordinal`
+
+Returns followed users' guesses for one specific location in today's game.
+
+Precondition:
+
+- the viewer must already have guessed that same location ordinal
+
+Path params:
+
+- `ordinal`: integer from `1` to `5`
+
+Response `200`:
+
+```json
+{
+  "game": {
+    "publicId": "gam_...",
+    "gameDate": "2026-07-20",
+    "name": "Daily Challenge"
+  },
+  "location": {
+    "publicId": "loc_...",
+    "ordinal": 3,
+    "name": "Berlin"
+  },
+  "guesses": [
+    {
+      "playPublicId": "ply_...",
+      "totalScore": 24000,
+      "finalizedAt": "2026-07-20 10:30:00",
+      "user": {
+        "publicId": "usr_...",
+        "handle": "friend_one",
+        "displayName": "Friend One"
+      },
+      "guess": {
+        "publicId": "gus_...",
+        "latitude": 52.5,
+        "longitude": 13.4,
+        "distanceMeters": 2100.42,
+        "score": 4998
+      }
+    }
+  ]
+}
+```
+
+Possible errors:
+
+- `400` if `ordinal` is outside `1..5`
+- `403` if the viewer has not guessed this location yet
+- `404` if no game exists for today or the location does not exist
+
 ## Admin endpoint
 
 ### `POST /admin/games/:date/seed`
 
 Creates or replaces the game for a specific date.
+
+This is the endpoint to use for scheduling future games. You can seed multiple upcoming dates ahead of time by calling this endpoint once per date.
 
 Authentication:
 
@@ -524,6 +581,12 @@ Rules:
 - `isoCountryCode` must be a 2-letter uppercase code
 - `:date` must use `YYYY-MM-DD`
 - reseeding is blocked once any play exists for that game date
+
+Practical usage:
+
+- seed today with `POST /admin/games/2026-07-20/seed`
+- seed tomorrow with `POST /admin/games/2026-07-21/seed`
+- seed an entire upcoming week by calling the endpoint once per date
 
 Example path:
 
@@ -579,7 +642,7 @@ Response `201` when the dated game is created, `200` when an empty game for that
   "created": true,
   "game": {
     "publicId": "gam_...",
-    "gameDate": "2026-07-20",
+    "gameDate": "2026-07-25",
     "name": "Daily Challenge",
     "locations": [
       {
@@ -603,6 +666,7 @@ Response `201` when the dated game is created, `200` when an empty game for that
 Possible errors:
 
 - `400` invalid payload
+- `400` invalid date format or invalid calendar date
 - `401` missing or invalid admin token
 - `409` if that game date already has plays
 - `500` if `ADMIN_SEED_TOKEN` is not configured
@@ -614,8 +678,9 @@ Possible errors:
 3. Load `GET /games/today` for the daily content.
 4. Load `GET /games/today/play` to restore the current player's progress.
 5. Submit guesses through `POST /games/today/guesses/:ordinal`.
-6. Refresh `GET /leaderboard` after the 5th guess or on leaderboard screens.
-7. Load `GET /games/today/social` only after the player has guessed at least once.
+6. Load `GET /games/today/social/:ordinal` when the UI needs friends' guesses for a specific location.
+7. Refresh `GET /leaderboard` after the 5th guess or on leaderboard screens.
+8. Load `GET /games/today/social` only after the player has guessed at least once.
 
 ## Local development
 
