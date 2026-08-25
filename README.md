@@ -709,6 +709,98 @@ Possible errors:
 - `409` if that game date already has plays
 - `500` if `ADMIN_SEED_TOKEN` is not configured
 
+### `GET /admin/games/:date`
+
+Reads the seeded game for a specific date.
+
+Authentication:
+
+```http
+x-admin-token: <ADMIN_SEED_TOKEN>
+```
+
+Example path:
+
+```http
+GET /admin/games/2026-07-25
+```
+
+Response `200`:
+
+```json
+{
+  "game": {
+    "publicId": "gam_...",
+    "gameDate": "2026-07-25",
+    "name": "Daily Challenge",
+    "locations": [
+      {
+        "publicId": "loc_...",
+        "ordinal": 1,
+        "name": "Berlin",
+        "region": "Berlin",
+        "isoCountryCode": "DE",
+        "description": "Capital city",
+        "latitude": 52.52,
+        "longitude": 13.405,
+        "locationLink": "https://example.com/berlin",
+        "sourceLink": "https://en.wikipedia.org/wiki/Berlin",
+        "pageViews": 12345
+      }
+    ]
+  }
+}
+```
+
+Possible errors:
+
+- `400` invalid date format or invalid calendar date
+- `401` missing or invalid admin token
+- `404` if the game date has not been seeded
+- `500` if `ADMIN_SEED_TOKEN` is not configured
+
+### `GET /admin/locations/recent`
+
+Returns every location used by games in the trailing 90-day window, ordered by newest game first and then by location ordinal.
+
+Authentication:
+
+```http
+x-admin-token: <ADMIN_SEED_TOKEN>
+```
+
+Response `200`:
+
+```json
+{
+  "locations": [
+    {
+      "game": {
+        "publicId": "gam_...",
+        "gameDate": "2026-07-25",
+        "name": "Daily Challenge"
+      },
+      "publicId": "loc_...",
+      "ordinal": 1,
+      "name": "Berlin",
+      "region": "Berlin",
+      "isoCountryCode": "DE",
+      "description": "Capital city",
+      "latitude": 52.52,
+      "longitude": 13.405,
+      "locationLink": "https://example.com/berlin",
+      "sourceLink": "https://en.wikipedia.org/wiki/Berlin",
+      "pageViews": 12345
+    }
+  ]
+}
+```
+
+Possible errors:
+
+- `401` missing or invalid admin token
+- `500` if `ADMIN_SEED_TOKEN` is not configured
+
 ## Suggested frontend integration order
 
 1. On app boot, ensure a token exists with `POST /sessions/guest` if needed.

@@ -91,6 +91,23 @@ type SocialLocationGuessRow = {
   score: number
 }
 
+type RecentLocationRow = {
+  game_public_id: string
+  game_date: string
+  game_name: string | null
+  location_public_id: string
+  ordinal: number
+  name: string
+  region: string | null
+  iso_country_code: string | null
+  description: string | null
+  latitude: number
+  longitude: number
+  location_link: string | null
+  source_link: string | null
+  page_views: number | null
+}
+
 type SessionWithUserRow = SessionRow & {
   handle: string
   display_name: string
@@ -124,8 +141,9 @@ const SESSION_HEADER = "authorization"
 const SESSION_PREFIX = "Bearer "
 const ADMIN_TOKEN_HEADER = "x-admin-token"
 const SESSION_DURATION_DAYS = 365
-const MAX_LOCATION_SCORE = 5000
 const PASSWORD_ITERATIONS = 100000
+const NEW_SCORING_START_DATE = "2026-08-01"
+const RECENT_LOCATION_LOOKBACK_DAYS = 90
 
 export default {
   async fetch(request: Request, env: AppEnv): Promise<Response> {
@@ -147,6 +165,19 @@ export default {
         const body = await readJson<SeedTodayGameInput>(request)
         const result = await seedGameForDate(env, gameDate, body)
         return withCors(json(result, result.created ? 201 : 200))
+      }
+
+      if (request.method === "GET" && pathname.match(/^\/admin\/games\/\d{4}-\d{2}-\d{2}$/)) {
+        await requireAdminSeedToken(request, env)
+        const gameDate = pathname.split("/")[3] as string
+        const game = requireFound(await getGameByDate(env, normalizeGameDate(gameDate)), 404, "Game not found")
+        return withCors(json({ game: serializeAdminGame(game) }))
+      }
+
+      if (request.method === "GET" && pathname === "/admin/locations/recent") {
+        await requireAdminSeedToken(request, env)
+        const locations = await getRecentUsedLocations(env)
+        return withCors(json({ locations }))
       }
 
       if (request.method === "POST" && pathname === "/sessions/guest") {
@@ -543,7 +574,7 @@ async function getGameByDate(env: AppEnv, gameDate: string) {
 }
 
 async function getCurrentGame(env: AppEnv) {
-  return getGameByDate(env, currentUtcDate())
+  return getGameByDate(env, currentGameDate())
 }
 
 async function requireCurrentGame(env: AppEnv) {
@@ -631,7 +662,7 @@ async function createGuess(env: AppEnv, userId: number, ordinal: number, latitud
   }
 
   const distanceMeters = haversineMeters(latitude, longitude, location.latitude, location.longitude)
-  const score = distanceToScore(distanceMeters)
+  const score = currentGameDate() >= NEW_SCORING_START_DATE ? newDistanceToScore(distanceMeters) : distanceToScore(distanceMeters)
   const guessPublicId = createPublicId("gus")
 
   await env.DB.prepare(
@@ -773,20 +804,6 @@ async function getLeaderboard(env: AppEnv, gameId: number) {
 }
 
 async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
-  const viewerGuess = await first<{ id: number }>(
-    env.DB.prepare(
-      `SELECT g.id
-       FROM plays p
-       JOIN guesses g ON g.play_id = p.id
-       WHERE p.game_id = ? AND p.user_id = ?
-       LIMIT 1`,
-    ).bind(gameId, userId),
-  )
-
-  if (!viewerGuess) {
-    throw httpError(403, "Submit at least one guess before viewing social guesses")
-  }
-
   const rows = await all<SocialGuessRow>(
     env.DB.prepare(
       `SELECT
@@ -876,21 +893,6 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
 async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: number, ordinal: number) {
   if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 5) {
     throw httpError(400, "Location ordinal must be between 1 and 5")
-  }
-
-  const viewerGuess = await first<{ id: number }>(
-    env.DB.prepare(
-      `SELECT g.id
-       FROM plays p
-       JOIN guesses g ON g.play_id = p.id
-       JOIN locations l ON l.id = g.location_id
-       WHERE p.game_id = ? AND p.user_id = ? AND l.ordinal = ?
-       LIMIT 1`,
-    ).bind(gameId, userId, ordinal),
-  )
-
-  if (!viewerGuess) {
-    throw httpError(403, "Submit your guess for this location before viewing social guesses")
   }
 
   const rows = await all<SocialLocationGuessRow>(
@@ -990,6 +992,15 @@ function summarizeGame(game: Awaited<ReturnType<typeof requireCurrentGame>>) {
     publicId: game.public_id,
     gameDate: game.game_date,
     name: game.name,
+  }
+}
+
+function serializeAdminGame(game: NonNullable<Awaited<ReturnType<typeof getGameByDate>>>) {
+  return {
+    publicId: game.public_id,
+    gameDate: game.game_date,
+    name: game.name,
+    locations: game.locations,
   }
 }
 
@@ -1135,9 +1146,15 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
   return earthRadiusMeters * c
 }
 
+function newDistanceToScore(distanceMeters: number) {
+  const distanceKm = distanceMeters / 1000
+  const score = Math.round(100 * Math.pow(Math.E, (-12 * (distanceKm - 7)) / 15000))
+  return Math.min(Math.max(0, score), 100)
+}
+
 function distanceToScore(distanceMeters: number) {
   const distanceKm = distanceMeters / 1000
-  const raw = MAX_LOCATION_SCORE - Math.floor(distanceKm)
+  const raw = 100 - Math.floor(distanceKm / 50)
   return Math.max(0, raw)
 }
 
@@ -1242,8 +1259,25 @@ function getAdminSeedToken(env: AppEnv) {
   return (env as AppEnv & { ADMIN_SEED_TOKEN?: string }).ADMIN_SEED_TOKEN ?? null
 }
 
-function currentUtcDate() {
-  return new Date().toISOString().slice(0, 10)
+const GAME_TIME_ZONE = "Europe/Vienna"
+
+function currentGameDate() {
+  return formatDateInTimeZone(new Date(), GAME_TIME_ZONE)
+}
+
+function gameDateDaysAgo(days: number) {
+  return addDays(new Date(`${currentGameDate()}T00:00:00.000Z`), -days)
+    .toISOString()
+    .slice(0, 10)
+}
+
+function formatDateInTimeZone(date: Date, timeZone: string) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date)
 }
 
 function requireFound<T>(value: T | null, status: number, message: string): T {
@@ -1261,6 +1295,53 @@ async function first<T>(statement: D1PreparedStatement): Promise<T | null> {
 async function all<T>(statement: D1PreparedStatement): Promise<T[]> {
   const result = await statement.all<T>()
   return result.results
+}
+
+async function getRecentUsedLocations(env: AppEnv) {
+  const latestGameDate = currentGameDate()
+  const earliestGameDate = gameDateDaysAgo(RECENT_LOCATION_LOOKBACK_DAYS - 1)
+  const rows = await all<RecentLocationRow>(
+    env.DB.prepare(
+      `SELECT
+        g.public_id AS game_public_id,
+        g.game_date,
+        g.name AS game_name,
+        l.public_id AS location_public_id,
+        l.ordinal,
+        l.name,
+        l.region,
+        l.iso_country_code,
+        l.description,
+        l.latitude,
+        l.longitude,
+        l.location_link,
+        l.source_link,
+        l.page_views
+      FROM games g
+      JOIN locations l ON l.game_id = g.id
+      WHERE g.game_date >= ? AND g.game_date <= ?
+      ORDER BY g.game_date DESC, l.ordinal ASC`,
+    ).bind(earliestGameDate, latestGameDate),
+  )
+
+  return rows.map((row) => ({
+    game: {
+      publicId: row.game_public_id,
+      gameDate: row.game_date,
+      name: row.game_name,
+    },
+    publicId: row.location_public_id,
+    ordinal: row.ordinal,
+    name: row.name,
+    region: row.region,
+    isoCountryCode: row.iso_country_code,
+    description: row.description,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    locationLink: row.location_link,
+    sourceLink: row.source_link,
+    pageViews: row.page_views,
+  }))
 }
 
 function json(payload: unknown, status = 200) {
