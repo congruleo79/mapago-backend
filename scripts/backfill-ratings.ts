@@ -1,5 +1,12 @@
 import { DEFAULT_ADMIN_API_URL, fetchJson, getRequiredEnv, parseArgs, printUsage } from "./ai/shared.mjs"
 
+declare const process: {
+  argv: string[]
+  stdout: {
+    write(chunk: string): void
+  }
+}
+
 type CliArgs = {
   [key: string]: string | boolean | string[] | undefined
   _: string[]
@@ -56,9 +63,7 @@ for (;;) {
   totalProcessedPlays += response.processedPlays
   totalCreatedEvents += response.createdEvents
 
-  process.stdout.write(
-    `processed=${response.processedPlays} createdEvents=${response.createdEvents} reset=${response.reset} nextCursor=${formatCursor(response.nextCursor)}\n`,
-  )
+  process.stdout.write(`processed=${response.processedPlays} createdEvents=${response.createdEvents} reset=${response.reset} nextCursor=${formatCursor(response.nextCursor)}\n`)
 
   if (response.nextCursor === null) {
     break
