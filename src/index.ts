@@ -41,6 +41,7 @@ type GameWithLocationRow = {
 type PlayGuessRow = {
   play_id: number
   play_public_id: string
+  user_id: number
   total_score: number
   play_created_at: string
   finalized_at: string | null
@@ -66,6 +67,7 @@ type LeaderboardRow = {
 }
 
 type SocialGuessRow = LeaderboardRow & {
+  user_id: number
   location_public_id: string
   ordinal: number
   guess_public_id: string
@@ -79,6 +81,7 @@ type SocialLocationGuessRow = {
   play_public_id: string
   total_score: number
   finalized_at: string
+  user_id: number
   user_public_id: string
   handle: string
   display_name: string
@@ -116,6 +119,86 @@ type SessionWithUserRow = SessionRow & {
   user_created_at: string
 }
 
+type FriendRow = {
+  id: number
+  public_id: string
+  lower_user_id: number
+  higher_user_id: number
+  lower_user_accepted: number
+  higher_user_accepted: number
+  created_at: string
+  updated_at: string
+}
+
+type FriendListRow = {
+  public_id: string
+  user_public_id: string
+  handle: string
+  display_name: string
+  created_at: string
+  updated_at: string
+}
+
+type RatedUserRow = {
+  id: number
+  public_id: string
+  handle: string
+  display_name: string
+  current_rating: number
+}
+
+type FinalizedPlayRatingRow = {
+  play_id: number
+  play_public_id: string
+  game_id: number
+  user_id: number
+  user_public_id: string
+  handle: string
+  display_name: string
+  total_score: number
+  finalized_at: string
+  current_rating: number
+}
+
+type RatingEventCountRow = {
+  event_count: number
+}
+
+type RatingChangeRow = {
+  user_id: number
+  rating_change: number
+}
+
+type RatingSettlementResult = {
+  opponentUserId: number
+  opponentPublicId: string
+  opponentHandle: string
+  opponentDisplayName: string
+  settledAt: string
+  scoreDelta: number
+  userRatingChange: number
+  userRatingAfter: number
+  opponentRatingChange: number
+  opponentRatingAfter: number
+}
+
+type RatingBackfillCursor = {
+  finalizedAt: string
+  playId: number
+}
+
+type RatingBackfillBatchResult = {
+  processedPlays: number
+  createdEvents: number
+  nextCursor: RatingBackfillCursor | null
+}
+
+type BackfillRatingsInput = {
+  reset?: boolean
+  limit?: number
+  cursor?: RatingBackfillCursor | null
+}
+
 type ErrorBody = {
   error: string
 }
@@ -144,6 +227,11 @@ const SESSION_DURATION_DAYS = 365
 const PASSWORD_ITERATIONS = 100000
 const NEW_SCORING_START_DATE = "2026-08-01"
 const RECENT_LOCATION_LOOKBACK_DAYS = 90
+const INITIAL_RATING = 1500
+const RATING_K_FACTOR = 24
+const RATING_SCALE = 400
+const RATING_MARGIN_LOG_DIVISOR = 4
+const RATING_MAX_MARGIN_MULTIPLIER = 3
 
 export default {
   async fetch(request: Request, env: AppEnv): Promise<Response> {
@@ -180,6 +268,18 @@ export default {
         return withCors(json({ locations }))
       }
 
+      if (request.method === "POST" && pathname === "/admin/ratings/backfill") {
+        await requireAdminSeedToken(request, env)
+        const body = normalizeBackfillRatingsInput(await readJson<BackfillRatingsInput>(request))
+
+        if (body.reset) {
+          await resetRatings(env)
+        }
+
+        const result = await backfillRatingsBatch(env, body.cursor, body.limit)
+        return withCors(json({ reset: body.reset, ...result }))
+      }
+
       if (request.method === "POST" && pathname === "/sessions/guest") {
         return withCors(await createGuestSession(env))
       }
@@ -212,7 +312,8 @@ export default {
         const game = await requireCurrentGame(env)
         const play = await getOrCreatePlay(env, game.game_id, session.user.id)
         const guesses = await getPlayWithGuesses(env, play.id)
-        return withCors(json({ play: serializePlay(guesses) }))
+        const ratingChange = await getRatingChangeForGameUser(env, game.game_id, session.user.id)
+        return withCors(json({ play: serializePlay(guesses, ratingChange) }))
       }
 
       if (request.method === "POST" && pathname.match(/^\/games\/today\/guesses\/\d+$/)) {
@@ -224,10 +325,31 @@ export default {
         return withCors(json(result, result.finalized ? 201 : 200))
       }
 
+      if (request.method === "POST" && pathname.match(/^\/friends\/[a-z0-9_]+$/)) {
+        const session = await requireSession(request, env)
+        const friendUserHandle = pathname.split("/").at(-1) as string
+        const friend = await addFriend(env, session.user.id, friendUserHandle)
+        return withCors(json({ friend }, friend.created ? 201 : 200))
+      }
+
+      if (request.method === "DELETE" && pathname.match(/^\/friends\/[a-z0-9_]+$/)) {
+        const session = await requireSession(request, env)
+        const friendUserHandle = pathname.split("/").at(-1) as string
+        const friend = await removeFriend(env, session.user.id, friendUserHandle)
+        return withCors(json({ friend }))
+      }
+
+      if (request.method === "GET" && pathname === "/friends") {
+        const session = await requireSession(request, env)
+        const friends = await listFriends(env, session.user.id)
+        return withCors(json({ users: friends }))
+      }
+
       if (request.method === "POST" && pathname.match(/^\/follows\/[a-z0-9_]+$/)) {
         const session = await requireSession(request, env)
         const followedUserHandle = pathname.split("/").at(-1) as string
         const follow = await createFollow(env, session.user.id, followedUserHandle)
+        await addFriend(env, session.user.id, followedUserHandle)
         return withCors(json({ follow }, 201))
       }
 
@@ -235,6 +357,7 @@ export default {
         const session = await requireSession(request, env)
         const followedUserHandle = pathname.split("/").at(-1) as string
         const unfollow = await deleteFollow(env, session.user.id, followedUserHandle)
+        await removeFriend(env, session.user.id, followedUserHandle)
         return withCors(json({ unfollow }))
       }
 
@@ -606,6 +729,7 @@ async function getPlayWithGuesses(env: AppEnv, playId: number) {
       `SELECT
         p.id AS play_id,
         p.public_id AS play_public_id,
+        p.user_id,
         p.total_score,
         p.created_at AS play_created_at,
         p.finalized_at,
@@ -682,15 +806,77 @@ async function createGuess(env: AppEnv, userId: number, ordinal: number, latitud
   if (aggregate.guess_count === 5) {
     finalized = true
     await env.DB.prepare(`UPDATE plays SET total_score = ?, finalized_at = CURRENT_TIMESTAMP WHERE id = ? AND finalized_at IS NULL`).bind(aggregate.total_score, play.id).run()
+    await applyRatingsForFinalizedPlay(env, play.id)
   } else {
     await env.DB.prepare(`UPDATE plays SET total_score = ? WHERE id = ?`).bind(aggregate.total_score, play.id).run()
   }
 
   const guesses = await getPlayWithGuesses(env, play.id)
+  const ratingChange = finalized ? await getRatingChangeForGameUser(env, game.game_id, userId) : 0
   return {
     finalized,
-    play: serializePlay(guesses),
+    play: serializePlay(guesses, ratingChange),
   }
+}
+
+async function applyRatingsForFinalizedPlay(env: AppEnv, playId: number) {
+  const play = requireFound(await getFinalizedPlayForRating(env, playId), 404, "Finalized play not found")
+  const opponents = await getPendingFriendRatingOpponents(env, play)
+  const settlements: RatingSettlementResult[] = []
+
+  for (const opponent of opponents) {
+    const eventCount = await getRatingEventCountForPair(env, play.game_id, play.user_id, opponent.user_id)
+    if (eventCount === 2) {
+      continue
+    }
+
+    if (eventCount !== 0) {
+      throw httpError(500, "Inconsistent rating history for play pair")
+    }
+
+    const calculation = calculateHeadToHeadRatingChange(play.current_rating, opponent.current_rating, play.total_score, opponent.total_score)
+
+    await persistRatingSettlement(env, play, opponent, calculation)
+
+    play.current_rating = calculation.userRatingAfter
+
+    settlements.push({
+      opponentUserId: opponent.user_id,
+      opponentPublicId: opponent.user_public_id,
+      opponentHandle: opponent.handle,
+      opponentDisplayName: opponent.display_name,
+      settledAt: play.finalized_at,
+      scoreDelta: play.total_score - opponent.total_score,
+      userRatingChange: calculation.userRatingChange,
+      userRatingAfter: calculation.userRatingAfter,
+      opponentRatingChange: calculation.opponentRatingChange,
+      opponentRatingAfter: calculation.opponentRatingAfter,
+    })
+  }
+
+  return settlements
+}
+
+async function backfillRatingsBatch(env: AppEnv, cursor: RatingBackfillCursor | null = null, limit = 100): Promise<RatingBackfillBatchResult> {
+  const plays = await listFinalizedPlaysForRatingBackfill(env, cursor, limit)
+  let createdEvents = 0
+
+  for (const play of plays) {
+    const settlements = await applyRatingsForFinalizedPlay(env, play.play_id)
+    createdEvents += settlements.length * 2
+  }
+
+  const lastPlay = plays.at(-1) ?? null
+
+  return {
+    processedPlays: plays.length,
+    createdEvents,
+    nextCursor: plays.length < limit || lastPlay === null ? null : { finalizedAt: lastPlay.finalized_at, playId: lastPlay.play_id },
+  }
+}
+
+async function resetRatings(env: AppEnv) {
+  await env.DB.batch([env.DB.prepare(`DELETE FROM user_rating_events`), env.DB.prepare(`UPDATE users SET current_rating = ?`).bind(INITIAL_RATING)])
 }
 
 async function createFollow(env: AppEnv, followerUserId: number, followedUserHandle: string) {
@@ -731,6 +917,53 @@ async function createFollow(env: AppEnv, followerUserId: number, followedUserHan
   return { publicId, followedUserHandle: followed.handle, mutual: true }
 }
 
+async function addFriend(env: AppEnv, currentUserId: number, friendUserHandle: string) {
+  const friendUser = await getFriendTargetUser(env, currentUserId, friendUserHandle)
+  const pair = getFriendPair(currentUserId, friendUser.id)
+  const existing = await first<FriendRow>(env.DB.prepare(`SELECT * FROM friends WHERE lower_user_id = ? AND higher_user_id = ?`).bind(pair.lowerUserId, pair.higherUserId))
+
+  if (!existing) {
+    const publicId = createPublicId("frd")
+    await env.DB.prepare(
+      `INSERT INTO friends (public_id, lower_user_id, higher_user_id, lower_user_accepted, higher_user_accepted)
+       VALUES (?, ?, ?, 1, 1)`,
+    )
+      .bind(publicId, pair.lowerUserId, pair.higherUserId)
+      .run()
+
+    const created = requireFound(await first<FriendRow>(env.DB.prepare(`SELECT * FROM friends WHERE public_id = ?`).bind(publicId)), 500, "Failed to load newly created friend relationship")
+
+    return {
+      created: true,
+      publicId: created.public_id,
+      user: serializeUser(friendUser),
+      accepted: true,
+      acceptedByOther: true,
+      active: true,
+      createdAt: created.created_at,
+      updatedAt: created.updated_at,
+    }
+  }
+
+  const acceptedColumn = pair.currentUserIsLower ? "lower_user_accepted" : "higher_user_accepted"
+  await env.DB.prepare(`UPDATE friends SET ${acceptedColumn} = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(existing.id).run()
+
+  const updated = requireFound(await first<FriendRow>(env.DB.prepare(`SELECT * FROM friends WHERE id = ?`).bind(existing.id)), 500, "Failed to load updated friend relationship")
+
+  const acceptedByOther = pair.currentUserIsLower ? updated.higher_user_accepted === 1 : updated.lower_user_accepted === 1
+
+  return {
+    created: false,
+    publicId: updated.public_id,
+    user: serializeUser(friendUser),
+    accepted: true,
+    acceptedByOther,
+    active: acceptedByOther,
+    createdAt: updated.created_at,
+    updatedAt: updated.updated_at,
+  }
+}
+
 async function deleteFollow(env: AppEnv, followerUserId: number, followedUserHandle: string) {
   const normalizedHandle = normalizeHandle(followedUserHandle)
   const followed = await first<UserRow>(env.DB.prepare(`SELECT * FROM users WHERE handle = ?`).bind(normalizedHandle))
@@ -754,6 +987,33 @@ async function deleteFollow(env: AppEnv, followerUserId: number, followedUserHan
   }
 }
 
+async function removeFriend(env: AppEnv, currentUserId: number, friendUserHandle: string) {
+  const friendUser = await getFriendTargetUser(env, currentUserId, friendUserHandle)
+  const pair = getFriendPair(currentUserId, friendUser.id)
+  const existing = await first<FriendRow>(env.DB.prepare(`SELECT * FROM friends WHERE lower_user_id = ? AND higher_user_id = ?`).bind(pair.lowerUserId, pair.higherUserId))
+
+  if (!existing) {
+    throw httpError(404, "Friend not found")
+  }
+
+  const acceptedColumn = pair.currentUserIsLower ? "lower_user_accepted" : "higher_user_accepted"
+  await env.DB.prepare(`UPDATE friends SET ${acceptedColumn} = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(existing.id).run()
+
+  const updated = requireFound(await first<FriendRow>(env.DB.prepare(`SELECT * FROM friends WHERE id = ?`).bind(existing.id)), 500, "Failed to load updated friend relationship")
+
+  const acceptedByOther = pair.currentUserIsLower ? updated.higher_user_accepted === 1 : updated.lower_user_accepted === 1
+
+  return {
+    publicId: updated.public_id,
+    user: serializeUser(friendUser),
+    accepted: false,
+    acceptedByOther,
+    active: false,
+    createdAt: updated.created_at,
+    updatedAt: updated.updated_at,
+  }
+}
+
 async function listFollows(env: AppEnv, followerUserId: number) {
   const rows = await all<{ public_id: string; handle: string; display_name: string; created_at: string }>(
     env.DB.prepare(
@@ -771,6 +1031,94 @@ async function listFollows(env: AppEnv, followerUserId: number) {
     displayName: row.display_name,
     followedAt: row.created_at,
   }))
+}
+
+async function listFriends(env: AppEnv, currentUserId: number) {
+  const rows = await all<FriendListRow>(
+    env.DB.prepare(
+      `SELECT
+        f.public_id,
+        u.public_id AS user_public_id,
+        u.handle,
+        u.display_name,
+        f.created_at,
+        f.updated_at
+       FROM friends f
+       JOIN users u ON u.id = CASE WHEN f.lower_user_id = ? THEN f.higher_user_id ELSE f.lower_user_id END
+       WHERE (f.lower_user_id = ? AND f.higher_user_accepted = 1)
+          OR (f.higher_user_id = ? AND f.lower_user_accepted = 1)
+       ORDER BY u.handle ASC`,
+    ).bind(currentUserId, currentUserId, currentUserId),
+  )
+
+  return rows.map((row) => ({
+    publicId: row.user_public_id,
+    handle: row.handle,
+    displayName: row.display_name,
+    friendedAt: row.created_at,
+    updatedAt: row.updated_at,
+    friendPublicId: row.public_id,
+  }))
+}
+
+async function getRatingChangeForGameUser(env: AppEnv, gameId: number, userId: number) {
+  const row = await first<{ rating_change: number | null }>(
+    env.DB.prepare(
+      `SELECT COALESCE(SUM(rating_change), 0) AS rating_change
+       FROM user_rating_events
+       WHERE game_id = ? AND user_id = ?`,
+    ).bind(gameId, userId),
+  )
+
+  return row?.rating_change ?? 0
+}
+
+async function getRatingChangesForGameUsers(env: AppEnv, gameId: number, userIds: number[]) {
+  if (userIds.length === 0) {
+    return new Map<number, number>()
+  }
+
+  const placeholders = userIds.map(() => "?").join(", ")
+  const rows = await all<RatingChangeRow>(
+    env.DB.prepare(
+      `SELECT user_id, COALESCE(SUM(rating_change), 0) AS rating_change
+       FROM user_rating_events
+       WHERE game_id = ? AND user_id IN (${placeholders})
+       GROUP BY user_id`,
+    ).bind(gameId, ...userIds),
+  )
+
+  const ratingChanges = new Map<number, number>()
+  for (const row of rows) {
+    ratingChanges.set(row.user_id, row.rating_change)
+  }
+
+  return ratingChanges
+}
+
+async function getRatingChangesForOpponent(env: AppEnv, gameId: number, opponentUserId: number, userIds: number[]) {
+  if (userIds.length === 0) {
+    return new Map<number, number>()
+  }
+
+  const placeholders = userIds.map(() => "?").join(", ")
+  const rows = await all<RatingChangeRow>(
+    env.DB.prepare(
+      `SELECT user_id, COALESCE(SUM(rating_change), 0) AS rating_change
+       FROM user_rating_events
+       WHERE game_id = ?
+         AND opponent_user_id = ?
+         AND user_id IN (${placeholders})
+       GROUP BY user_id`,
+    ).bind(gameId, opponentUserId, ...userIds),
+  )
+
+  const ratingChanges = new Map<number, number>()
+  for (const row of rows) {
+    ratingChanges.set(row.user_id, row.rating_change)
+  }
+
+  return ratingChanges
 }
 
 async function getLeaderboard(env: AppEnv, gameId: number) {
@@ -803,6 +1151,194 @@ async function getLeaderboard(env: AppEnv, gameId: number) {
   }))
 }
 
+async function getFinalizedPlayForRating(env: AppEnv, playId: number) {
+  return await first<FinalizedPlayRatingRow>(
+    env.DB.prepare(
+      `SELECT
+        p.id AS play_id,
+        p.public_id AS play_public_id,
+        p.game_id,
+        p.user_id,
+        u.public_id AS user_public_id,
+        u.handle,
+        u.display_name,
+        p.total_score,
+        p.finalized_at,
+        u.current_rating
+       FROM plays p
+       JOIN users u ON u.id = p.user_id
+       WHERE p.id = ? AND p.finalized_at IS NOT NULL`,
+    ).bind(playId),
+  )
+}
+
+async function listFinalizedPlaysForRatingBackfill(env: AppEnv, cursor: RatingBackfillCursor | null, limit: number) {
+  return await all<FinalizedPlayRatingRow>(
+    env.DB.prepare(
+      `SELECT
+        p.id AS play_id,
+        p.public_id AS play_public_id,
+        p.game_id,
+        p.user_id,
+        u.public_id AS user_public_id,
+        u.handle,
+        u.display_name,
+        p.total_score,
+        p.finalized_at,
+        u.current_rating
+       FROM plays p
+       JOIN users u ON u.id = p.user_id
+       WHERE p.finalized_at IS NOT NULL
+         AND (
+           ? IS NULL
+           OR p.finalized_at > ?
+           OR (p.finalized_at = ? AND p.id > ?)
+         )
+       ORDER BY p.finalized_at ASC, p.id ASC
+       LIMIT ?`,
+    ).bind(cursor?.finalizedAt ?? null, cursor?.finalizedAt ?? null, cursor?.finalizedAt ?? null, cursor?.playId ?? 0, limit),
+  )
+}
+
+async function getPendingFriendRatingOpponents(env: AppEnv, play: FinalizedPlayRatingRow) {
+  return await all<FinalizedPlayRatingRow>(
+    env.DB.prepare(
+      `SELECT
+        p.id AS play_id,
+        p.public_id AS play_public_id,
+        p.game_id,
+        p.user_id,
+        u.public_id AS user_public_id,
+        u.handle,
+        u.display_name,
+        p.total_score,
+        p.finalized_at,
+        u.current_rating
+       FROM friends f
+       JOIN plays p ON p.game_id = ? AND p.finalized_at IS NOT NULL
+       JOIN users u ON u.id = p.user_id
+       WHERE f.lower_user_accepted = 1
+         AND f.higher_user_accepted = 1
+         AND (
+           (f.lower_user_id = ? AND f.higher_user_id = p.user_id)
+           OR (f.higher_user_id = ? AND f.lower_user_id = p.user_id)
+         )
+         AND (
+           p.finalized_at < ?
+           OR (p.finalized_at = ? AND p.id < ?)
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM user_rating_events e
+           WHERE e.game_id = p.game_id
+             AND e.user_id = ?
+             AND e.opponent_user_id = p.user_id
+         )
+       ORDER BY p.finalized_at ASC, p.id ASC`,
+    ).bind(play.game_id, play.user_id, play.user_id, play.finalized_at, play.finalized_at, play.play_id, play.user_id),
+  )
+}
+
+async function getRatingEventCountForPair(env: AppEnv, gameId: number, userId: number, opponentUserId: number) {
+  const row = requireFound(
+    await first<RatingEventCountRow>(
+      env.DB.prepare(
+        `SELECT COUNT(*) AS event_count
+         FROM user_rating_events
+         WHERE game_id = ?
+           AND ((user_id = ? AND opponent_user_id = ?) OR (user_id = ? AND opponent_user_id = ?))`,
+      ).bind(gameId, userId, opponentUserId, opponentUserId, userId),
+    ),
+    500,
+    "Failed to count rating events",
+  )
+
+  return row.event_count
+}
+
+async function persistRatingSettlement(env: AppEnv, play: FinalizedPlayRatingRow, opponent: FinalizedPlayRatingRow, calculation: ReturnType<typeof calculateHeadToHeadRatingChange>) {
+  const userEventPublicId = createPublicId("rat")
+  const opponentEventPublicId = createPublicId("rat")
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO user_rating_events (public_id, user_id, opponent_user_id, game_id, rating_change, rating_after, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(userEventPublicId, play.user_id, opponent.user_id, play.game_id, calculation.userRatingChange, calculation.userRatingAfter, play.finalized_at),
+    env.DB.prepare(
+      `INSERT INTO user_rating_events (public_id, user_id, opponent_user_id, game_id, rating_change, rating_after, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(opponentEventPublicId, opponent.user_id, play.user_id, play.game_id, calculation.opponentRatingChange, calculation.opponentRatingAfter, play.finalized_at),
+    env.DB.prepare(`UPDATE users SET current_rating = ? WHERE id = ?`).bind(calculation.userRatingAfter, play.user_id),
+    env.DB.prepare(`UPDATE users SET current_rating = ? WHERE id = ?`).bind(calculation.opponentRatingAfter, opponent.user_id),
+  ])
+}
+
+function calculateHeadToHeadRatingChange(userRating: number, opponentRating: number, userScore: number, opponentScore: number) {
+  const expectedScore = calculateExpectedScore(userRating, opponentRating)
+  const actualScore = calculateActualScore(userScore, opponentScore)
+  const marginMultiplier = calculateMarginMultiplier(userScore, opponentScore)
+  const userRatingChange = Math.round(RATING_K_FACTOR * marginMultiplier * (actualScore - expectedScore))
+
+  return {
+    userRatingChange,
+    opponentRatingChange: -userRatingChange,
+    userRatingAfter: userRating + userRatingChange,
+    opponentRatingAfter: opponentRating - userRatingChange,
+  }
+}
+
+function calculateExpectedScore(userRating: number, opponentRating: number) {
+  return 1 / (1 + Math.pow(10, (opponentRating - userRating) / RATING_SCALE))
+}
+
+function calculateActualScore(userScore: number, opponentScore: number) {
+  if (userScore > opponentScore) {
+    return 1
+  }
+
+  if (userScore < opponentScore) {
+    return 0
+  }
+
+  return 0.5
+}
+
+function calculateMarginMultiplier(userScore: number, opponentScore: number) {
+  const scoreDifference = Math.abs(userScore - opponentScore)
+  if (scoreDifference === 0) {
+    return 1
+  }
+
+  const multiplier = 1 + Math.log1p(scoreDifference) / RATING_MARGIN_LOG_DIVISOR
+  return Math.min(RATING_MAX_MARGIN_MULTIPLIER, Math.max(1, multiplier))
+}
+
+async function getFriendTargetUser(env: AppEnv, currentUserId: number, friendUserHandle: string) {
+  const normalizedHandle = normalizeHandle(friendUserHandle)
+  const friendUser = await first<UserRow>(env.DB.prepare(`SELECT * FROM users WHERE handle = ?`).bind(normalizedHandle))
+
+  if (!friendUser) {
+    throw httpError(404, "User not found")
+  }
+
+  if (friendUser.id === currentUserId) {
+    throw httpError(400, "Cannot friend yourself")
+  }
+
+  return friendUser
+}
+
+function getFriendPair(currentUserId: number, otherUserId: number) {
+  const lowerUserId = Math.min(currentUserId, otherUserId)
+  const higherUserId = Math.max(currentUserId, otherUserId)
+  return {
+    lowerUserId,
+    higherUserId,
+    currentUserIsLower: currentUserId === lowerUserId,
+  }
+}
+
 async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
   const rows = await all<SocialGuessRow>(
     env.DB.prepare(
@@ -810,6 +1346,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
         p.public_id AS play_public_id,
         p.total_score,
         p.finalized_at,
+        p.user_id,
         u.public_id AS user_public_id,
         u.handle,
         u.display_name,
@@ -820,15 +1357,20 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
         g.guess_longitude,
         g.distance_meters,
         g.score
-       FROM follows f
-       JOIN plays p ON p.user_id = f.followed_user_id AND p.game_id = ?
+         FROM friends f
+         JOIN plays p ON p.user_id = CASE WHEN f.lower_user_id = ? THEN f.higher_user_id ELSE f.lower_user_id END AND p.game_id = ?
        JOIN users u ON u.id = p.user_id
        JOIN guesses g ON g.play_id = p.id
        JOIN locations l ON l.id = g.location_id
-       WHERE f.follower_user_id = ?
+         WHERE ((f.lower_user_id = ? AND f.higher_user_id != ?)
+           OR (f.higher_user_id = ? AND f.lower_user_id != ?))
+          AND f.lower_user_accepted = 1
+          AND f.higher_user_accepted = 1
        ORDER BY u.handle ASC, l.ordinal ASC`,
-    ).bind(gameId, userId),
+    ).bind(userId, gameId, userId, userId, userId, userId),
   )
+
+  const ratingChanges = await getRatingChangesForOpponent(env, gameId, userId, Array.from(new Set(rows.map((row) => row.user_id))))
 
   const grouped = new Map<
     string,
@@ -836,6 +1378,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
       playPublicId: string
       totalScore: number
       finalizedAt: string
+      ratingChange: number
       user: { publicId: string; handle: string; displayName: string }
       guesses: Array<{
         locationPublicId: string
@@ -868,6 +1411,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
       playPublicId: row.play_public_id,
       totalScore: row.total_score,
       finalizedAt: row.finalized_at,
+      ratingChange: ratingChanges.get(row.user_id) ?? 0,
       user: {
         publicId: row.user_public_id,
         handle: row.handle,
@@ -901,6 +1445,7 @@ async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: n
         p.public_id AS play_public_id,
         p.total_score,
         p.finalized_at,
+        p.user_id,
         u.public_id AS user_public_id,
         u.handle,
         u.display_name,
@@ -911,15 +1456,21 @@ async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: n
         g.guess_longitude,
         g.distance_meters,
         g.score
-       FROM follows f
-       JOIN plays p ON p.user_id = f.followed_user_id AND p.game_id = ?
+         FROM friends f
+         JOIN plays p ON p.user_id = CASE WHEN f.lower_user_id = ? THEN f.higher_user_id ELSE f.lower_user_id END AND p.game_id = ?
        JOIN users u ON u.id = p.user_id
        JOIN guesses g ON g.play_id = p.id
        JOIN locations l ON l.id = g.location_id
-       WHERE f.follower_user_id = ? AND l.ordinal = ?
+         WHERE (((f.lower_user_id = ? AND f.higher_user_id != ?)
+           OR (f.higher_user_id = ? AND f.lower_user_id != ?)))
+          AND f.lower_user_accepted = 1
+          AND f.higher_user_accepted = 1
+          AND l.ordinal = ?
        ORDER BY u.handle ASC`,
-    ).bind(gameId, userId, ordinal),
+    ).bind(userId, gameId, userId, userId, userId, userId, ordinal),
   )
+
+  const ratingChanges = await getRatingChangesForOpponent(env, gameId, userId, Array.from(new Set(rows.map((row) => row.user_id))))
 
   const location = await first<{ public_id: string; ordinal: number; name: string }>(
     env.DB.prepare(`SELECT public_id, ordinal, name FROM locations WHERE game_id = ? AND ordinal = ?`).bind(gameId, ordinal),
@@ -939,6 +1490,7 @@ async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: n
       playPublicId: row.play_public_id,
       totalScore: row.total_score,
       finalizedAt: row.finalized_at,
+      ratingChange: ratingChanges.get(row.user_id) ?? 0,
       user: {
         publicId: row.user_public_id,
         handle: row.handle,
@@ -965,12 +1517,13 @@ function serializeUser(user: UserRow) {
   }
 }
 
-function serializePlay(rows: PlayGuessRow[]) {
+function serializePlay(rows: PlayGuessRow[], ratingChange = 0) {
   const firstRow = rows[0]
   return {
     publicId: firstRow.play_public_id,
     totalScore: firstRow.total_score,
     finalizedAt: firstRow.finalized_at,
+    ratingChange,
     createdAt: firstRow.play_created_at,
     guesses: rows
       .filter((row) => row.guess_id !== null)
@@ -1022,6 +1575,36 @@ function normalizeSeedTodayGameInput(body: SeedTodayGameInput) {
   return {
     name: normalizeOptionalText(body.name, 100),
     locations: body.locations.map((location, index) => normalizeSeedLocation(location, index + 1)),
+  }
+}
+
+function normalizeBackfillRatingsInput(body: BackfillRatingsInput) {
+  const reset = body.reset === true
+  const limit = body.limit === undefined ? 100 : body.limit
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw httpError(400, "Backfill limit must be an integer between 1 and 500")
+  }
+
+  if (body.cursor === undefined || body.cursor === null) {
+    return { reset, limit, cursor: null }
+  }
+
+  if (typeof body.cursor.finalizedAt !== "string" || !body.cursor.finalizedAt.trim()) {
+    throw httpError(400, "Backfill cursor finalizedAt must be a non-empty string")
+  }
+
+  if (!Number.isInteger(body.cursor.playId) || body.cursor.playId < 1) {
+    throw httpError(400, "Backfill cursor playId must be a positive integer")
+  }
+
+  return {
+    reset,
+    limit,
+    cursor: {
+      finalizedAt: body.cursor.finalizedAt,
+      playId: body.cursor.playId,
+    },
   }
 }
 

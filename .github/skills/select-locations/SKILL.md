@@ -1,13 +1,18 @@
-MapAgo is a daily guessing game, where you guess 5 locations on a map that somehow, maybe even loosely relate thematically or historically to the current date. Locations can be places where something happened on that day, a city, monument or natural formation related to these events, birthplaces, etc. or maybe even only relate to a theme, e.g. February 14, Valentines day could feature locations associated with Love, like Paris.
+---
+name: select-locations
+description: Curate and validate five MapAgo game locations for a requested YYYY-MM-DD date. Use when asked to select, curate, generate, or prepare daily MapAgo locations.
+---
 
-I want you to curate a list of 5 interesting locations for {{date}}.
+MapAgo is a daily guessing game, where you guess 5 locations on a map that somehow, maybe even loosely relate thematically or historically to the requested date. Locations can be places where something happened on that day, a city, monument or natural formation related to these events, birthplaces, etc. or maybe even only relate to a theme, e.g. February 14, Valentines day could feature locations associated with Love, like Paris.
+
+Curate a list of 5 interesting locations for the date requested by the user. Require the date in `YYYY-MM-DD` format before starting.
 
 DO NOT READ previous location FILES IN /locations unless specifically instructed.
 Do not read, inspect or infer preferences from previous curations in the repository. Base your decisions only on the information provided in this prompt.
 
-1. Read `locations/candidates/blacklist.txt` to get a blacklist of locations which have been used in the past. DO NOT re-use any of these locations.
+1. Read `locations/candidates/blacklist.txt` to get a blacklist of locations which you cannot use. DO NOT use any of these locations.
 
-2. Call `npm run ai:events -- --date {{date}}` FIRST to get a compacted list of wikipedia's "On this day" to get potential candidate events for {{date}} in the format:
+2. Call `npm run ai:events -- --date <date>` FIRST to get a compacted list of wikipedia's "On this day" to get potential candidate events for the requested date in the format:
 
 ```
 {index} | {category} | {year} | {text}
@@ -30,7 +35,7 @@ locations: {location1}, {location2}
 - Never re-use locations present in the blacklist
 - Avoid using locations from the same countries that have been used recently, i.e. towards the end of the blacklist.txt file
 
-4. Only once's you've already narrowed down the list of potential events. Use `npm run ai:candidates:get -- --date {{date}} --indices 0,4,5,19` to retrieve a more detailed version of the events you want to use for your curation. The output will be in the format:
+4. Only once's you've already narrowed down the list of potential events. Use `npm run ai:candidates:get -- --date <date> --indices 0,4,5,19` to retrieve a more detailed version of the events you want to use for your curation. The output will be in the format:
 
 ```
 {
@@ -50,7 +55,7 @@ locations: {location1}, {location2}
   },
 ```
 
-5. Output JSON into a file at `locations/{{date}}.json`.
+5. Output JSON into a file at `locations/<date>.json`.
 
 - The file must contain an array of 5 objects
 - Sort the locations by easiest to hardest to find on an unlabeled map.
@@ -75,7 +80,7 @@ locations: {location1}, {location2}
 - `wikibase_id` must be the Wikidata ID of the location, e.g. Q60 for New York City.
 - `coordinates` must be an object with the latitude and longitude of the location, e.g. `{ "lat": 40.7128, "lon": -74.0060 }
 
-Output the curated list of 5 locations in valid JSON format to a file at `locations/{{date}}.json`.
+Output the curated list of 5 locations in valid JSON format to a file at `locations/<date>.json`.
 
 Expected JSON shape example:
 
@@ -94,4 +99,4 @@ Expected JSON shape example:
 ]
 ```
 
-6. Validate the JSON using `npm run ai:validate:locations -- --date {{date}}`.
+6. Validate the JSON using `npm run ai:validate:locations -- --date <date>`.

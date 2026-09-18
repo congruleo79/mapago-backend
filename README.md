@@ -8,7 +8,7 @@ This document is written for frontend integration. It describes the auth flow, r
 
 - Base URL: your deployed Worker URL, for example `https://mapago-backend.<subdomain>.workers.dev`
 - Content type: all request and response bodies are JSON
-- CORS: enabled for `GET`, `POST`, `PATCH`, `OPTIONS`
+- CORS: enabled for `GET`, `POST`, `PATCH`, `DELETE`, `OPTIONS`
 - Error shape:
 
 ```json
@@ -45,6 +45,7 @@ Notes:
 - A game always contains exactly 5 ordered locations.
 - Guesses are immutable. A player can only submit one guess per location.
 - The 5th guess auto-finalizes the play.
+- When a play finalizes, the backend settles rating changes against already-finalized active friends for the same game in finalization order.
 - Leaderboard only shows finalized plays.
 - Social guesses are only visible after the viewer has submitted at least one guess for today's game.
 - Location-specific social guesses are only visible after the viewer has submitted their own guess for that same location.
@@ -63,6 +64,8 @@ Notes:
   "createdAt": "2026-07-20 10:15:00"
 }
 ```
+
+Current rating is stored server-side with an initial value of `1500`. Individual rating changes are recorded in a per-user rating history table.
 
 ### Game
 
@@ -300,6 +303,7 @@ Response `200`:
     "publicId": "ply_...",
     "totalScore": 0,
     "finalizedAt": null,
+    "ratingChange": 0,
     "createdAt": "2026-07-20 10:20:00",
     "guesses": []
   }
@@ -345,6 +349,7 @@ Response `200` for guesses 1 to 4, `201` on guess 5:
     "publicId": "ply_...",
     "totalScore": 4998,
     "finalizedAt": null,
+    "ratingChange": 0,
     "createdAt": "2026-07-20 10:20:00",
     "guesses": [
       {
@@ -368,6 +373,11 @@ Possible errors:
 - `404` no game for today or location missing
 - `409` guess already submitted for that location
 - `409` play already finalized
+
+Notes:
+
+- On the 5th guess, the backend finalizes the play and applies rating changes against already-finalized active friends for that same game.
+- `ratingChange` is the total rating delta for that user in this game so far, aggregated across all settled friend matchups for the game.
 
 ### `POST /follows/:handle`
 
@@ -453,6 +463,52 @@ Response `200`:
 }
 ```
 
+### `POST /friends/:handle`
+
+Creates or re-enables a friend relationship for the current user.
+
+Path params:
+
+- `handle`: the target user's handle
+
+Request body: none
+
+Response `201` on create, `200` on re-enable:
+
+```json
+{
+  "friend": {
+    "created": true,
+    "publicId": "frd_...",
+    "user": {
+      "publicId": "usr_...",
+      "handle": "friend_one",
+      "displayName": "Friend One",
+      "hasPassword": true,
+      "createdAt": "2026-07-20 10:15:00"
+    },
+    "accepted": true,
+    "acceptedByOther": true,
+    "active": true,
+    "createdAt": "2026-07-20 11:00:00",
+    "updatedAt": "2026-07-20 11:00:00"
+  }
+}
+```
+
+Notes:
+
+- If no canonical friend row exists yet, both sides are set to accepted.
+- If the row already exists, only the caller's accepted side is set to `true`.
+
+### `DELETE /friends/:handle`
+
+Disables the current user's side of an existing friend relationship.
+
+### `GET /friends`
+
+Returns relationships where the other side still accepts the current user. This includes rows where the current user has unfriended someone and can later re-enable that friendship.
+
 ### `GET /leaderboard`
 
 Returns today's finalized plays only.
@@ -511,6 +567,7 @@ Response `200`:
       "playPublicId": "ply_...",
       "totalScore": 24000,
       "finalizedAt": "2026-07-20 10:30:00",
+      "ratingChange": 18,
       "user": {
         "publicId": "usr_...",
         "handle": "friend_one",
@@ -568,6 +625,7 @@ Response `200`:
       "playPublicId": "ply_...",
       "totalScore": 24000,
       "finalizedAt": "2026-07-20 10:30:00",
+      "ratingChange": 18,
       "user": {
         "publicId": "usr_...",
         "handle": "friend_one",
@@ -801,6 +859,46 @@ Possible errors:
 - `401` missing or invalid admin token
 - `500` if `ADMIN_SEED_TOKEN` is not configured
 
+### `POST /admin/ratings/backfill`
+
+Replays rating history in chronological batches.
+
+Authentication:
+
+```http
+x-admin-token: <ADMIN_SEED_TOKEN>
+```
+
+Request body:
+
+```json
+{
+  "reset": true,
+  "limit": 100,
+  "cursor": null
+}
+```
+
+Notes:
+
+- `reset=true` clears `user_rating_events` and resets every user's current rating to `1500` before the batch runs.
+- Plays are replayed in `finalized_at`, then `play.id` order.
+- Continue calling the endpoint with the returned `nextCursor` until it returns `null`.
+
+Response `200`:
+
+```json
+{
+  "reset": true,
+  "processedPlays": 100,
+  "createdEvents": 284,
+  "nextCursor": {
+    "finalizedAt": "2026-08-15 09:12:33",
+    "playId": 482
+  }
+}
+```
+
 ## Suggested frontend integration order
 
 1. On app boot, ensure a token exists with `POST /sessions/guest` if needed.
@@ -832,6 +930,12 @@ npm run db:migrate:local
 npm run dev
 ```
 
+4. Replay ratings in batches:
+
+```bash
+npm run ratings:backfill -- --reset --limit 100
+```
+
 ## Deployment notes
 
 1. Create or bind the D1 database in `wrangler.jsonc`.
@@ -845,4 +949,10 @@ npm run db:migrate:remote
 
 ```bash
 npm run deploy
+```
+
+4. Backfill ratings against production:
+
+```bash
+npm run ratings:backfill -- --reset --limit 100 --api-url https://mapago-backend.map-ago.workers.dev/admin/ratings/backfill
 ```
