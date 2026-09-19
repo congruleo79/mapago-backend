@@ -60,6 +60,7 @@ Notes:
   "publicId": "usr_...",
   "handle": "guest_ab12cd34",
   "displayName": "Guest ab12cd34",
+  "currentRating": 1500,
   "hasPassword": false,
   "createdAt": "2026-07-20 10:15:00"
 }
@@ -147,6 +148,7 @@ Response `201`:
     "publicId": "usr_...",
     "handle": "guest_ab12cd34",
     "displayName": "Guest ab12cd34",
+    "currentRating": 1500,
     "hasPassword": false,
     "createdAt": "2026-07-20 10:15:00"
   }
@@ -180,6 +182,7 @@ Response `201`:
     "publicId": "usr_...",
     "handle": "florian",
     "displayName": "Florian",
+    "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
   }
@@ -203,6 +206,7 @@ Response `200`:
     "publicId": "usr_...",
     "handle": "florian",
     "displayName": "Florian",
+    "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
   }
@@ -237,6 +241,7 @@ Response `200`:
     "publicId": "usr_...",
     "handle": "florian",
     "displayName": "Florian",
+    "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
   }
@@ -281,6 +286,7 @@ Response `200`:
     "publicId": "usr_...",
     "handle": "florian",
     "displayName": "Florian",
+    "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
   }
@@ -484,6 +490,7 @@ Response `201` on create, `200` on re-enable:
       "publicId": "usr_...",
       "handle": "friend_one",
       "displayName": "Friend One",
+      "currentRating": 1524,
       "hasPassword": true,
       "createdAt": "2026-07-20 10:15:00"
     },
@@ -504,6 +511,29 @@ Notes:
 ### `DELETE /friends/:handle`
 
 Disables the current user's side of an existing friend relationship.
+
+Response `200`:
+
+```json
+{
+  "friend": {
+    "publicId": "frd_...",
+    "user": {
+      "publicId": "usr_...",
+      "handle": "friend_one",
+      "displayName": "Friend One",
+      "currentRating": 1524,
+      "hasPassword": true,
+      "createdAt": "2026-07-20 10:15:00"
+    },
+    "accepted": false,
+    "acceptedByOther": true,
+    "active": false,
+    "createdAt": "2026-07-20 11:00:00",
+    "updatedAt": "2026-07-20 12:00:00"
+  }
+}
+```
 
 ### `GET /friends`
 
@@ -558,6 +588,7 @@ Response `200`:
     "publicId": "usr_...",
     "handle": "florian",
     "displayName": "Florian",
+    "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
   }
@@ -566,7 +597,7 @@ Response `200`:
 
 ### `GET /games/today/social`
 
-Returns plays and guesses for followed users for today's game.
+Returns plays and guesses for fully accepted friends for today's game.
 
 Precondition:
 
@@ -616,7 +647,7 @@ Possible errors:
 
 ### `GET /games/today/social/:ordinal`
 
-Returns followed users' guesses for one specific location in today's game.
+Returns fully accepted friends' guesses for one specific location in today's game.
 
 Precondition:
 
