@@ -509,6 +509,25 @@ Disables the current user's side of an existing friend relationship.
 
 Returns relationships where the other side still accepts the current user. This includes rows where the current user has unfriended someone and can later re-enable that friendship.
 
+Response `200`:
+
+```json
+{
+  "users": [
+    {
+      "publicId": "usr_...",
+      "handle": "friend_one",
+      "displayName": "Friend One",
+      "currentRating": 1524,
+      "accepted": true,
+      "friendedAt": "2026-07-20 11:00:00",
+      "updatedAt": "2026-07-20 11:00:00",
+      "friendPublicId": "frd_..."
+    }
+  ]
+}
+```
+
 ### `GET /leaderboard`
 
 Returns today's finalized plays only.
@@ -571,7 +590,8 @@ Response `200`:
       "user": {
         "publicId": "usr_...",
         "handle": "friend_one",
-        "displayName": "Friend One"
+        "displayName": "Friend One",
+        "currentRating": 1524
       },
       "guesses": [
         {
@@ -629,7 +649,8 @@ Response `200`:
       "user": {
         "publicId": "usr_...",
         "handle": "friend_one",
-        "displayName": "Friend One"
+        "displayName": "Friend One",
+        "currentRating": 1524
       },
       "guess": {
         "publicId": "gus_...",

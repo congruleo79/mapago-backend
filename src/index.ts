@@ -6,6 +6,7 @@ type UserRow = {
   handle: string
   display_name: string
   password_hash: string | null
+  current_rating: number
   created_at: string
 }
 
@@ -68,6 +69,7 @@ type LeaderboardRow = {
 
 type SocialGuessRow = LeaderboardRow & {
   user_id: number
+  current_rating: number
   location_public_id: string
   ordinal: number
   guess_public_id: string
@@ -82,6 +84,7 @@ type SocialLocationGuessRow = {
   total_score: number
   finalized_at: string
   user_id: number
+  current_rating: number
   user_public_id: string
   handle: string
   display_name: string
@@ -115,6 +118,7 @@ type SessionWithUserRow = SessionRow & {
   handle: string
   display_name: string
   password_hash: string | null
+  current_rating: number
   user_public_id: string
   user_created_at: string
 }
@@ -135,6 +139,8 @@ type FriendListRow = {
   user_public_id: string
   handle: string
   display_name: string
+  current_rating: number
+  accepted: number
   created_at: string
   updated_at: string
 }
@@ -518,6 +524,7 @@ async function requireSession(request: Request, env: AppEnv): Promise<{ user: Us
         u.handle,
         u.display_name,
         u.password_hash,
+        u.current_rating,
         u.public_id AS user_public_id,
         u.created_at AS user_created_at
       FROM user_sessions s
@@ -539,6 +546,7 @@ async function requireSession(request: Request, env: AppEnv): Promise<{ user: Us
       handle: row.handle,
       display_name: row.display_name,
       password_hash: row.password_hash,
+      current_rating: row.current_rating,
       created_at: row.user_created_at,
     },
     session: {
@@ -1041,6 +1049,8 @@ async function listFriends(env: AppEnv, currentUserId: number) {
         u.public_id AS user_public_id,
         u.handle,
         u.display_name,
+        u.current_rating,
+        CASE WHEN f.lower_user_id = ? THEN f.lower_user_accepted ELSE f.higher_user_accepted END AS accepted,
         f.created_at,
         f.updated_at
        FROM friends f
@@ -1048,13 +1058,15 @@ async function listFriends(env: AppEnv, currentUserId: number) {
        WHERE (f.lower_user_id = ? AND f.higher_user_accepted = 1)
           OR (f.higher_user_id = ? AND f.lower_user_accepted = 1)
        ORDER BY u.handle ASC`,
-    ).bind(currentUserId, currentUserId, currentUserId),
+    ).bind(currentUserId, currentUserId, currentUserId, currentUserId),
   )
 
   return rows.map((row) => ({
     publicId: row.user_public_id,
     handle: row.handle,
     displayName: row.display_name,
+    currentRating: row.current_rating,
+    accepted: row.accepted === 1,
     friendedAt: row.created_at,
     updatedAt: row.updated_at,
     friendPublicId: row.public_id,
@@ -1350,6 +1362,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
         u.public_id AS user_public_id,
         u.handle,
         u.display_name,
+        u.current_rating,
         l.public_id AS location_public_id,
         l.ordinal,
         g.public_id AS guess_public_id,
@@ -1379,7 +1392,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
       totalScore: number
       finalizedAt: string
       ratingChange: number
-      user: { publicId: string; handle: string; displayName: string }
+      user: { publicId: string; handle: string; displayName: string; currentRating: number }
       guesses: Array<{
         locationPublicId: string
         ordinal: number
@@ -1416,6 +1429,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
         publicId: row.user_public_id,
         handle: row.handle,
         displayName: row.display_name,
+        currentRating: row.current_rating,
       },
       guesses: [
         {
@@ -1446,6 +1460,7 @@ async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: n
         p.total_score,
         p.finalized_at,
         p.user_id,
+        u.current_rating,
         u.public_id AS user_public_id,
         u.handle,
         u.display_name,
@@ -1495,6 +1510,7 @@ async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: n
         publicId: row.user_public_id,
         handle: row.handle,
         displayName: row.display_name,
+        currentRating: row.current_rating,
       },
       guess: {
         publicId: row.guess_public_id,
@@ -1512,6 +1528,7 @@ function serializeUser(user: UserRow) {
     publicId: user.public_id,
     handle: user.handle,
     displayName: user.display_name,
+    currentRating: user.current_rating,
     hasPassword: Boolean(user.password_hash),
     createdAt: user.created_at,
   }
