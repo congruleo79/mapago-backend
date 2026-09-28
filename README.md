@@ -19,7 +19,13 @@ This document is written for frontend integration. It describes the auth flow, r
 
 ## Authentication
 
-All player endpoints require:
+All player endpoints accept either:
+
+```http
+Cookie: mapago_session=<token>
+```
+
+or:
 
 ```http
 Authorization: Bearer <token>
@@ -29,7 +35,7 @@ Recommended frontend flow:
 
 1. If the client has no token, call `POST /sessions/guest`.
 2. Persist the returned token locally.
-3. Send that token on every authenticated request.
+3. Send that token on every authenticated request until cookie-based auth is fully rolled out on your clients.
 4. If the player wants a stable account, call `PATCH /me` with `handle`, `displayName`, and optionally `password`.
 5. Returning players can call `POST /sessions/login` with `handle` and `password` to get a fresh token.
 
@@ -37,7 +43,11 @@ Notes:
 
 - Guest users are real users with a generated handle like `guest_ab12cd34`.
 - A password is optional until the player sets one.
-- If the token is missing or invalid, the API returns `401`.
+- The backend checks the `mapago_session` cookie first, then falls back to `Authorization: Bearer <token>`.
+- Successful guest creation, password login, and authenticated API responses all refresh the `mapago_session` cookie.
+- Sessions last 365 days and use sliding expiration, so each authenticated request renews the session and cookie for another year.
+- `POST /sessions/logout` clears the cookie and revokes the current session when one is present.
+- If the session token is missing or invalid, the API returns `401`.
 
 ## Core domain rules
 
@@ -159,6 +169,7 @@ Frontend use:
 
 - Call this once on first app load if no token exists.
 - Save `token` immediately.
+- The response also sets the `mapago_session` cookie.
 
 ### `POST /sessions/login`
 
@@ -193,6 +204,19 @@ Possible errors:
 
 - `400` if password is shorter than 8 chars
 - `401` if credentials are invalid
+
+Frontend use:
+
+- Save `token` immediately if your client still uses bearer auth.
+- The response also sets the `mapago_session` cookie.
+
+### `POST /sessions/logout`
+
+Clears the `mapago_session` cookie and revokes the current session when a valid cookie or bearer token is present.
+
+Request body: none
+
+Response `204`: no body
 
 ### `GET /me`
 

@@ -228,6 +228,7 @@ type SeedTodayGameInput = {
 
 const SESSION_HEADER = "authorization"
 const SESSION_PREFIX = "Bearer "
+const SESSION_COOKIE_NAME = "mapago_session"
 const ADMIN_TOKEN_HEADER = "x-admin-token"
 const SESSION_DURATION_DAYS = 365
 const PASSWORD_ITERATIONS = 100000
@@ -287,30 +288,43 @@ export default {
       }
 
       if (request.method === "POST" && pathname === "/sessions/guest") {
-        return withCors(await createGuestSession(env))
+        const session = await createGuestSession(env)
+        const { expiresAt, ...body } = session
+        return withCors(withSessionCookie(json(body, 201), session.token, expiresAt))
       }
 
       if (request.method === "POST" && pathname === "/sessions/login") {
         const session = await createPasswordSession(request, env)
-        return withCors(json(session, 201))
+        const { expiresAt, ...body } = session
+        return withCors(withSessionCookie(json(body, 201), session.token, expiresAt))
+      }
+
+      if (request.method === "POST" && pathname === "/sessions/logout") {
+        const session = await findSession(request, env, false)
+
+        if (session) {
+          await revokeSession(env, session.session.id)
+        }
+
+        return withCors(clearSessionCookie(new Response(null, { status: 204 })))
       }
 
       if (request.method === "GET" && pathname === "/me") {
         const session = await requireSession(request, env)
-        return withCors(json({ user: serializeUser(session.user) }))
+        return withCors(withSessionCookie(json({ user: serializeUser(session.user) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "PATCH" && pathname === "/me") {
         const session = await requireSession(request, env)
         const body = await readJson<{ handle?: string; displayName?: string; password?: string }>(request)
         const user = await updateCurrentUser(env, session.user, body)
-        return withCors(json({ user: serializeUser(user) }))
+        return withCors(withSessionCookie(json({ user: serializeUser(user) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/games/today") {
         const session = await requireSession(request, env)
         const game = await getCurrentGame(env)
-        return withCors(json({ game, user: serializeUser(session.user) }))
+        return withCors(withSessionCookie(json({ game, user: serializeUser(session.user) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/games/today/play") {
@@ -319,7 +333,7 @@ export default {
         const play = await getOrCreatePlay(env, game.game_id, session.user.id)
         const guesses = await getPlayWithGuesses(env, play.id)
         const ratingChange = await getRatingChangeForGameUser(env, game.game_id, session.user.id)
-        return withCors(json({ play: serializePlay(guesses, ratingChange) }))
+        return withCors(withSessionCookie(json({ play: serializePlay(guesses, ratingChange) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "POST" && pathname.match(/^\/games\/today\/guesses\/\d+$/)) {
@@ -328,27 +342,27 @@ export default {
         const body = await readJson<{ latitude: number; longitude: number }>(request)
         validateCoordinatePayload(body)
         const result = await createGuess(env, session.user.id, ordinal, body.latitude, body.longitude)
-        return withCors(json(result, result.finalized ? 201 : 200))
+        return withCors(withSessionCookie(json(result, result.finalized ? 201 : 200), session.token, session.session.expires_at))
       }
 
       if (request.method === "POST" && pathname.match(/^\/friends\/[a-z0-9_]+$/)) {
         const session = await requireSession(request, env)
         const friendUserHandle = pathname.split("/").at(-1) as string
         const friend = await addFriend(env, session.user.id, friendUserHandle)
-        return withCors(json({ friend }, friend.created ? 201 : 200))
+        return withCors(withSessionCookie(json({ friend }, friend.created ? 201 : 200), session.token, session.session.expires_at))
       }
 
       if (request.method === "DELETE" && pathname.match(/^\/friends\/[a-z0-9_]+$/)) {
         const session = await requireSession(request, env)
         const friendUserHandle = pathname.split("/").at(-1) as string
         const friend = await removeFriend(env, session.user.id, friendUserHandle)
-        return withCors(json({ friend }))
+        return withCors(withSessionCookie(json({ friend }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/friends") {
         const session = await requireSession(request, env)
         const friends = await listFriends(env, session.user.id)
-        return withCors(json({ users: friends }))
+        return withCors(withSessionCookie(json({ users: friends }), session.token, session.session.expires_at))
       }
 
       if (request.method === "POST" && pathname.match(/^\/follows\/[a-z0-9_]+$/)) {
@@ -356,7 +370,7 @@ export default {
         const followedUserHandle = pathname.split("/").at(-1) as string
         const follow = await createFollow(env, session.user.id, followedUserHandle)
         await addFriend(env, session.user.id, followedUserHandle)
-        return withCors(json({ follow }, 201))
+        return withCors(withSessionCookie(json({ follow }, 201), session.token, session.session.expires_at))
       }
 
       if (request.method === "DELETE" && pathname.match(/^\/follows\/[a-z0-9_]+$/)) {
@@ -364,27 +378,27 @@ export default {
         const followedUserHandle = pathname.split("/").at(-1) as string
         const unfollow = await deleteFollow(env, session.user.id, followedUserHandle)
         await removeFriend(env, session.user.id, followedUserHandle)
-        return withCors(json({ unfollow }))
+        return withCors(withSessionCookie(json({ unfollow }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/follows") {
         const session = await requireSession(request, env)
         const follows = await listFollows(env, session.user.id)
-        return withCors(json({ users: follows }))
+        return withCors(withSessionCookie(json({ users: follows }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/leaderboard") {
         const session = await requireSession(request, env)
         const game = await requireCurrentGame(env)
         const leaderboard = await getLeaderboard(env, game.game_id)
-        return withCors(json({ game: summarizeGame(game), leaderboard, user: serializeUser(session.user) }))
+        return withCors(withSessionCookie(json({ game: summarizeGame(game), leaderboard, user: serializeUser(session.user) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/games/today/social") {
         const session = await requireSession(request, env)
         const game = await requireCurrentGame(env)
         const social = await getSocialGuesses(env, game.game_id, session.user.id)
-        return withCors(json({ game: summarizeGame(game), plays: social }))
+        return withCors(withSessionCookie(json({ game: summarizeGame(game), plays: social }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname.match(/^\/games\/today\/social\/\d+$/)) {
@@ -392,7 +406,7 @@ export default {
         const ordinal = Number(pathname.split("/").at(-1))
         const game = await requireCurrentGame(env)
         const social = await getSocialGuessesForOrdinal(env, game.game_id, session.user.id, ordinal)
-        return withCors(json({ game: summarizeGame(game), location: social.location, guesses: social.guesses }))
+        return withCors(withSessionCookie(json({ game: summarizeGame(game), location: social.location, guesses: social.guesses }), session.token, session.session.expires_at))
       }
 
       return withCors(jsonError("Not found", 404))
@@ -402,7 +416,7 @@ export default {
   },
 }
 
-async function createGuestSession(env: AppEnv): Promise<Response> {
+async function createGuestSession(env: AppEnv) {
   const token = createOpaqueToken()
   const tokenHash = await sha256Hex(token)
   const userPublicId = createPublicId("usr")
@@ -419,7 +433,7 @@ async function createGuestSession(env: AppEnv): Promise<Response> {
 
   await env.DB.prepare(`INSERT INTO user_sessions (public_id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)`).bind(sessionPublicId, user.id, tokenHash, expiresAt).run()
 
-  return json({ token, user: serializeUser(user) }, 201)
+  return { token, user: serializeUser(user), expiresAt }
 }
 
 async function createPasswordSession(request: Request, env: AppEnv) {
@@ -450,6 +464,7 @@ async function createPasswordSession(request: Request, env: AppEnv) {
   return {
     token,
     user: serializeUser(user),
+    expiresAt,
   }
 }
 
@@ -499,19 +514,111 @@ async function updateCurrentUser(env: AppEnv, user: UserRow, body: { handle?: st
   return requireFound(await first<UserRow>(env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(user.id)), 500, "Failed to load updated user")
 }
 
-async function requireSession(request: Request, env: AppEnv): Promise<{ user: UserRow; session: SessionRow }> {
+async function requireSession(request: Request, env: AppEnv): Promise<{ user: UserRow; session: SessionRow; token: string }> {
+  const tokens = getSessionTokenCandidates(request)
+  if (tokens.length === 0) {
+    throw httpError(401, "Missing session token")
+  }
+
+  const session = await findSession(request, env, true)
+  if (!session) {
+    throw httpError(401, "Invalid session")
+  }
+
+  return session
+}
+
+async function findSession(request: Request, env: AppEnv, renew: boolean): Promise<{ user: UserRow; session: SessionRow; token: string } | null> {
+  for (const token of getSessionTokenCandidates(request)) {
+    const row = await getSessionRowByToken(env, token)
+    if (!row) {
+      continue
+    }
+
+    const expiresAt = renew ? await renewSession(env, row.id) : row.expires_at
+
+    return {
+      token,
+      user: {
+        id: row.user_id,
+        public_id: row.user_public_id,
+        handle: row.handle,
+        display_name: row.display_name,
+        password_hash: row.password_hash,
+        current_rating: row.current_rating,
+        created_at: row.user_created_at,
+      },
+      session: {
+        id: row.id,
+        public_id: row.public_id,
+        user_id: row.user_id,
+        token_hash: row.token_hash,
+        expires_at: expiresAt,
+        revoked_at: row.revoked_at,
+        created_at: row.created_at,
+      },
+    }
+  }
+
+  return null
+}
+
+function getSessionTokenCandidates(request: Request) {
+  const cookieToken = getCookie(request, SESSION_COOKIE_NAME)
+  const bearerToken = getBearerToken(request)
+
+  if (cookieToken && bearerToken && cookieToken !== bearerToken) {
+    return [cookieToken, bearerToken]
+  }
+
+  if (cookieToken) {
+    return [cookieToken]
+  }
+
+  if (bearerToken) {
+    return [bearerToken]
+  }
+
+  return []
+}
+
+function getCookie(request: Request, name: string) {
+  const cookieHeader = request.headers.get("cookie")
+  if (!cookieHeader) {
+    return null
+  }
+
+  for (const part of cookieHeader.split(";")) {
+    const [rawName, ...rawValueParts] = part.trim().split("=")
+    if (rawName !== name) {
+      continue
+    }
+
+    const rawValue = rawValueParts.join("=")
+    if (!rawValue) {
+      return null
+    }
+
+    return decodeURIComponent(rawValue)
+  }
+
+  return null
+}
+
+function getBearerToken(request: Request) {
   const header = request.headers.get(SESSION_HEADER)
   if (!header || !header.startsWith(SESSION_PREFIX)) {
-    throw httpError(401, "Missing bearer token")
+    return null
   }
 
   const token = header.slice(SESSION_PREFIX.length).trim()
-  if (!token) {
-    throw httpError(401, "Missing bearer token")
-  }
+  return token || null
+}
 
+async function getSessionRowByToken(env: AppEnv, token: string) {
   const tokenHash = await sha256Hex(token)
-  const row = await first<SessionWithUserRow>(
+
+  return first<SessionWithUserRow>(
     env.DB.prepare(
       `SELECT
         s.id,
@@ -534,31 +641,16 @@ async function requireSession(request: Request, env: AppEnv): Promise<{ user: Us
         AND s.expires_at > CURRENT_TIMESTAMP`,
     ).bind(tokenHash),
   )
+}
 
-  if (!row) {
-    throw httpError(401, "Invalid session")
-  }
+async function renewSession(env: AppEnv, sessionId: number) {
+  const expiresAt = addDays(new Date(), SESSION_DURATION_DAYS).toISOString()
+  await env.DB.prepare(`UPDATE user_sessions SET expires_at = ? WHERE id = ?`).bind(expiresAt, sessionId).run()
+  return expiresAt
+}
 
-  return {
-    user: {
-      id: row.user_id,
-      public_id: row.user_public_id,
-      handle: row.handle,
-      display_name: row.display_name,
-      password_hash: row.password_hash,
-      current_rating: row.current_rating,
-      created_at: row.user_created_at,
-    },
-    session: {
-      id: row.id,
-      public_id: row.public_id,
-      user_id: row.user_id,
-      token_hash: row.token_hash,
-      expires_at: row.expires_at,
-      revoked_at: row.revoked_at,
-      created_at: row.created_at,
-    },
-  }
+async function revokeSession(env: AppEnv, sessionId: number) {
+  await env.DB.prepare(`UPDATE user_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(sessionId).run()
 }
 
 async function requireAdminSeedToken(request: Request, env: AppEnv) {
@@ -1955,6 +2047,34 @@ function json(payload: unknown, status = 200) {
 
 function jsonError(error: string, status: number) {
   return json({ error } satisfies ErrorBody, status)
+}
+
+function withSessionCookie(response: Response, token: string, expiresAt: string) {
+  const headers = new Headers(response.headers)
+  headers.append("set-cookie", buildSessionCookie(token, expiresAt))
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+function clearSessionCookie(response: Response) {
+  const headers = new Headers(response.headers)
+  headers.append("set-cookie", buildClearedSessionCookie())
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+function buildSessionCookie(token: string, expiresAt: string) {
+  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Expires=${new Date(expiresAt).toUTCString()}; HttpOnly; Path=/; SameSite=None; Secure`
+}
+
+function buildClearedSessionCookie() {
+  return `${SESSION_COOKIE_NAME}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Max-Age=0; Path=/; SameSite=None; Secure`
 }
 
 function withCors(response: Response) {
