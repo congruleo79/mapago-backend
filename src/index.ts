@@ -71,6 +71,7 @@ type LeaderboardRow = {
 type SocialGuessRow = LeaderboardRow & {
   user_id: number
   current_rating: number
+  icon: string
   location_public_id: string
   ordinal: number
   guess_public_id: string
@@ -89,6 +90,7 @@ type SocialLocationGuessRow = {
   user_public_id: string
   handle: string
   display_name: string
+  icon: string
   location_public_id: string
   ordinal: number
   guess_public_id: string
@@ -141,6 +143,7 @@ type FriendListRow = {
   user_public_id: string
   handle: string
   display_name: string
+  icon: string
   current_rating: number
   accepted: number
   created_at: string
@@ -152,7 +155,19 @@ type RatedUserRow = {
   public_id: string
   handle: string
   display_name: string
+  icon: string
   current_rating: number
+}
+
+type DailyRatingHistoryRow = {
+  user_id: number
+  game_date: string
+  rating_after: number
+}
+
+type LatestRatingBeforeDateRow = {
+  user_id: number
+  rating_after: number
 }
 
 type FinalizedPlayRatingRow = {
@@ -236,6 +251,7 @@ const SESSION_DURATION_DAYS = 365
 const PASSWORD_ITERATIONS = 100000
 const NEW_SCORING_START_DATE = "2026-08-01"
 const RECENT_LOCATION_LOOKBACK_DAYS = 90
+const ALLOWED_CORS_ORIGINS = new Set(["https://congruleo79.github.io", "https://map-ago.pages.dev", "https://mapago.date"])
 const INITIAL_RATING = 1500
 const RATING_K_FACTOR = 24
 const RATING_SCALE = 400
@@ -254,7 +270,7 @@ export default {
       const pathname = trimTrailingSlash(url.pathname)
 
       if (request.method === "OPTIONS") {
-        return withCors(new Response(null, { status: 204 }))
+        return withCors(request, new Response(null, { status: 204 }))
       }
 
       if (request.method === "GET" && pathname === "/health") {
@@ -266,20 +282,20 @@ export default {
         const gameDate = pathname.split("/")[3] as string
         const body = await readJson<SeedTodayGameInput>(request)
         const result = await seedGameForDate(env, gameDate, body)
-        return withCors(json(result, result.created ? 201 : 200))
+        return withCors(request, json(result, result.created ? 201 : 200))
       }
 
       if (request.method === "GET" && pathname.match(/^\/admin\/games\/\d{4}-\d{2}-\d{2}$/)) {
         await requireAdminSeedToken(request, env)
         const gameDate = pathname.split("/")[3] as string
         const game = requireFound(await getGameByDate(env, normalizeGameDate(gameDate)), 404, "Game not found")
-        return withCors(json({ game: serializeAdminGame(game) }))
+        return withCors(request, json({ game: serializeAdminGame(game) }))
       }
 
       if (request.method === "GET" && pathname === "/admin/locations/recent") {
         await requireAdminSeedToken(request, env)
         const locations = await getRecentUsedLocations(env)
-        return withCors(json({ locations }))
+        return withCors(request, json({ locations }))
       }
 
       if (request.method === "POST" && pathname === "/admin/ratings/backfill") {
@@ -291,25 +307,25 @@ export default {
         }
 
         const result = await backfillRatingsBatch(env, body.cursor, body.limit)
-        return withCors(json({ reset: body.reset, ...result }))
+        return withCors(request, json({ reset: body.reset, ...result }))
       }
 
       if (request.method === "POST" && pathname === "/admin/users/icons/populate-empty") {
         await requireAdminSeedToken(request, env)
         const result = await populateEmptyUserIcons(env)
-        return withCors(json(result))
+        return withCors(request, json(result))
       }
 
       if (request.method === "POST" && pathname === "/sessions/guest") {
         const session = await createGuestSession(env)
         const { expiresAt, ...body } = session
-        return withCors(withSessionCookie(json(body, 201), session.token, expiresAt))
+        return withCors(request, withSessionCookie(json(body, 201), session.token, expiresAt))
       }
 
       if (request.method === "POST" && pathname === "/sessions/login") {
         const session = await createPasswordSession(request, env)
         const { expiresAt, ...body } = session
-        return withCors(withSessionCookie(json(body, 201), session.token, expiresAt))
+        return withCors(request, withSessionCookie(json(body, 201), session.token, expiresAt))
       }
 
       if (request.method === "POST" && pathname === "/sessions/logout") {
@@ -319,25 +335,25 @@ export default {
           await revokeSession(env, session.session.id)
         }
 
-        return withCors(clearSessionCookie(new Response(null, { status: 204 })))
+        return withCors(request, clearSessionCookie(new Response(null, { status: 204 })))
       }
 
       if (request.method === "GET" && pathname === "/me") {
         const session = await requireSession(request, env)
-        return withCors(withSessionCookie(json({ user: serializeUser(session.user) }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ user: serializeUser(session.user) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "PATCH" && pathname === "/me") {
         const session = await requireSession(request, env)
         const body = await readJson<{ handle?: string; displayName?: string; icon?: string; password?: string }>(request)
         const user = await updateCurrentUser(env, session.user, body)
-        return withCors(withSessionCookie(json({ user: serializeUser(user) }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ user: serializeUser(user) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/games/today") {
         const session = await requireSession(request, env)
         const game = await getCurrentGame(env)
-        return withCors(withSessionCookie(json({ game, user: serializeUser(session.user) }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ game, user: serializeUser(session.user) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/games/today/play") {
@@ -346,7 +362,7 @@ export default {
         const play = await getOrCreatePlay(env, game.game_id, session.user.id)
         const guesses = await getPlayWithGuesses(env, play.id)
         const ratingChange = await getRatingChangeForGameUser(env, game.game_id, session.user.id)
-        return withCors(withSessionCookie(json({ play: serializePlay(guesses, ratingChange) }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ play: serializePlay(guesses, ratingChange) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "POST" && pathname.match(/^\/games\/today\/guesses\/\d+$/)) {
@@ -355,27 +371,33 @@ export default {
         const body = await readJson<{ latitude: number; longitude: number }>(request)
         validateCoordinatePayload(body)
         const result = await createGuess(env, session.user.id, ordinal, body.latitude, body.longitude)
-        return withCors(withSessionCookie(json(result, result.finalized ? 201 : 200), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json(result, result.finalized ? 201 : 200), session.token, session.session.expires_at))
       }
 
       if (request.method === "POST" && pathname.match(/^\/friends\/[a-z0-9_]+$/)) {
         const session = await requireSession(request, env)
         const friendUserHandle = pathname.split("/").at(-1) as string
         const friend = await addFriend(env, session.user.id, friendUserHandle)
-        return withCors(withSessionCookie(json({ friend }, friend.created ? 201 : 200), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ friend }, friend.created ? 201 : 200), session.token, session.session.expires_at))
       }
 
       if (request.method === "DELETE" && pathname.match(/^\/friends\/[a-z0-9_]+$/)) {
         const session = await requireSession(request, env)
         const friendUserHandle = pathname.split("/").at(-1) as string
         const friend = await removeFriend(env, session.user.id, friendUserHandle)
-        return withCors(withSessionCookie(json({ friend }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ friend }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/friends") {
         const session = await requireSession(request, env)
         const friends = await listFriends(env, session.user.id)
-        return withCors(withSessionCookie(json({ users: friends }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ users: friends }), session.token, session.session.expires_at))
+      }
+
+      if (request.method === "GET" && pathname === "/ratings/history") {
+        const session = await requireSession(request, env)
+        const history = await getSocialRatingHistory(env, session.user.id)
+        return withCors(request, withSessionCookie(json(history), session.token, session.session.expires_at))
       }
 
       if (request.method === "POST" && pathname.match(/^\/follows\/[a-z0-9_]+$/)) {
@@ -383,7 +405,7 @@ export default {
         const followedUserHandle = pathname.split("/").at(-1) as string
         const follow = await createFollow(env, session.user.id, followedUserHandle)
         await addFriend(env, session.user.id, followedUserHandle)
-        return withCors(withSessionCookie(json({ follow }, 201), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ follow }, 201), session.token, session.session.expires_at))
       }
 
       if (request.method === "DELETE" && pathname.match(/^\/follows\/[a-z0-9_]+$/)) {
@@ -391,27 +413,27 @@ export default {
         const followedUserHandle = pathname.split("/").at(-1) as string
         const unfollow = await deleteFollow(env, session.user.id, followedUserHandle)
         await removeFriend(env, session.user.id, followedUserHandle)
-        return withCors(withSessionCookie(json({ unfollow }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ unfollow }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/follows") {
         const session = await requireSession(request, env)
         const follows = await listFollows(env, session.user.id)
-        return withCors(withSessionCookie(json({ users: follows }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ users: follows }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/leaderboard") {
         const session = await requireSession(request, env)
         const game = await requireCurrentGame(env)
         const leaderboard = await getLeaderboard(env, game.game_id)
-        return withCors(withSessionCookie(json({ game: summarizeGame(game), leaderboard, user: serializeUser(session.user) }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ game: summarizeGame(game), leaderboard, user: serializeUser(session.user) }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname === "/games/today/social") {
         const session = await requireSession(request, env)
         const game = await requireCurrentGame(env)
         const social = await getSocialGuesses(env, game.game_id, session.user.id)
-        return withCors(withSessionCookie(json({ game: summarizeGame(game), plays: social }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ game: summarizeGame(game), plays: social }), session.token, session.session.expires_at))
       }
 
       if (request.method === "GET" && pathname.match(/^\/games\/today\/social\/\d+$/)) {
@@ -419,12 +441,12 @@ export default {
         const ordinal = Number(pathname.split("/").at(-1))
         const game = await requireCurrentGame(env)
         const social = await getSocialGuessesForOrdinal(env, game.game_id, session.user.id, ordinal)
-        return withCors(withSessionCookie(json({ game: summarizeGame(game), location: social.location, guesses: social.guesses }), session.token, session.session.expires_at))
+        return withCors(request, withSessionCookie(json({ game: summarizeGame(game), location: social.location, guesses: social.guesses }), session.token, session.session.expires_at))
       }
 
-      return withCors(jsonError("Not found", 404))
+      return withCors(request, jsonError("Not found", 404))
     } catch (error) {
-      return withCors(handleError(error))
+      return withCors(request, handleError(error))
     }
   },
 }
@@ -1174,6 +1196,7 @@ async function listFriends(env: AppEnv, currentUserId: number) {
         u.public_id AS user_public_id,
         u.handle,
         u.display_name,
+        u.icon,
         u.current_rating,
         CASE WHEN f.lower_user_id = ? THEN f.lower_user_accepted ELSE f.higher_user_accepted END AS accepted,
         f.created_at,
@@ -1190,6 +1213,7 @@ async function listFriends(env: AppEnv, currentUserId: number) {
     publicId: row.user_public_id,
     handle: row.handle,
     displayName: row.display_name,
+    icon: row.icon,
     currentRating: row.current_rating,
     accepted: row.accepted === 1,
     friendedAt: row.created_at,
@@ -1231,6 +1255,131 @@ async function getRatingChangesForGameUsers(env: AppEnv, gameId: number, userIds
   }
 
   return ratingChanges
+}
+
+async function getSocialRatingHistory(env: AppEnv, currentUserId: number) {
+  const users = await listRatedUsersForHistory(env, currentUserId)
+  const days = Array.from({ length: 14 }, (_, index) => gameDateDaysAgo(13 - index))
+  const startDate = days[0]
+  const endDate = days[days.length - 1]
+  const userIds = users.map((user) => user.id)
+  const dailyRatings = await getDailyRatingsForUsers(env, userIds, startDate, endDate)
+  const latestRatingsBeforeWindow = await getLatestRatingsBeforeDateForUsers(env, userIds, startDate)
+  const ratingsByUser = new Map<number, Map<string, number>>()
+
+  for (const row of dailyRatings) {
+    const existing = ratingsByUser.get(row.user_id) ?? new Map<string, number>()
+    existing.set(row.game_date, row.rating_after)
+    ratingsByUser.set(row.user_id, existing)
+  }
+
+  const orderedUsers = [...users].sort((left, right) => {
+    if (left.id === currentUserId) {
+      return -1
+    }
+
+    if (right.id === currentUserId) {
+      return 1
+    }
+
+    return left.handle.localeCompare(right.handle)
+  })
+
+  return {
+    days,
+    series: orderedUsers.map((user) => {
+      const dailyUserRatings = ratingsByUser.get(user.id) ?? new Map<string, number>()
+      let rating = latestRatingsBeforeWindow.get(user.id) ?? INITIAL_RATING
+
+      return {
+        user: {
+          publicId: user.public_id,
+          handle: user.handle,
+          displayName: user.display_name,
+          icon: user.icon,
+          currentRating: user.current_rating,
+        },
+        points: days.map((date) => {
+          rating = dailyUserRatings.get(date) ?? rating
+          return { date, rating }
+        }),
+      }
+    }),
+  }
+}
+
+async function listRatedUsersForHistory(env: AppEnv, currentUserId: number) {
+  return all<RatedUserRow>(
+    env.DB.prepare(
+      `SELECT DISTINCT
+        u.id,
+        u.public_id,
+        u.handle,
+        u.display_name,
+        u.icon,
+        u.current_rating
+       FROM users u
+       WHERE u.id = ?
+       UNION
+       SELECT DISTINCT
+        u.id,
+        u.public_id,
+        u.handle,
+        u.display_name,
+        u.icon,
+        u.current_rating
+       FROM friends f
+       JOIN users u ON u.id = CASE WHEN f.lower_user_id = ? THEN f.higher_user_id ELSE f.lower_user_id END
+       WHERE (f.lower_user_id = ? AND f.higher_user_accepted = 1)
+          OR (f.higher_user_id = ? AND f.lower_user_accepted = 1)`,
+    ).bind(currentUserId, currentUserId, currentUserId, currentUserId),
+  )
+}
+
+async function getDailyRatingsForUsers(env: AppEnv, userIds: number[], startDate: string, endDate: string) {
+  if (userIds.length === 0) {
+    return []
+  }
+
+  const placeholders = userIds.map(() => "?").join(", ")
+  return all<DailyRatingHistoryRow>(
+    env.DB.prepare(
+      `SELECT latest.user_id, latest.game_date, ure.rating_after
+       FROM (
+         SELECT ure.user_id, g.game_date, MAX(ure.id) AS latest_event_id
+         FROM user_rating_events ure
+         JOIN games g ON g.id = ure.game_id
+         WHERE ure.user_id IN (${placeholders})
+           AND g.game_date BETWEEN ? AND ?
+         GROUP BY ure.user_id, g.game_date
+       ) latest
+       JOIN user_rating_events ure ON ure.id = latest.latest_event_id`,
+    ).bind(...userIds, startDate, endDate),
+  )
+}
+
+async function getLatestRatingsBeforeDateForUsers(env: AppEnv, userIds: number[], startDate: string) {
+  if (userIds.length === 0) {
+    return new Map<number, number>()
+  }
+
+  const placeholders = userIds.map(() => "?").join(", ")
+  const rows = await all<LatestRatingBeforeDateRow>(
+    env.DB.prepare(
+      `SELECT latest.user_id, ure.rating_after
+       FROM (
+         SELECT ure.user_id, MAX(ure.id) AS latest_event_id
+         FROM user_rating_events ure
+         JOIN games g ON g.id = ure.game_id
+         WHERE ure.user_id IN (${placeholders})
+           AND g.game_date < ?
+         GROUP BY ure.user_id
+       ) latest
+       JOIN user_rating_events ure ON ure.id = latest.latest_event_id`,
+    ).bind(...userIds, startDate),
+  )
+
+  return new Map(rows.map((row) => [row.user_id, row.rating_after]))
 }
 
 async function getRatingChangesForOpponent(env: AppEnv, gameId: number, opponentUserId: number, userIds: number[]) {
@@ -1487,6 +1636,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
         u.public_id AS user_public_id,
         u.handle,
         u.display_name,
+        u.icon,
         u.current_rating,
         l.public_id AS location_public_id,
         l.ordinal,
@@ -1517,7 +1667,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
       totalScore: number
       finalizedAt: string
       ratingChange: number
-      user: { publicId: string; handle: string; displayName: string; currentRating: number }
+      user: { publicId: string; handle: string; displayName: string; icon: string; currentRating: number }
       guesses: Array<{
         locationPublicId: string
         ordinal: number
@@ -1554,6 +1704,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
         publicId: row.user_public_id,
         handle: row.handle,
         displayName: row.display_name,
+        icon: row.icon,
         currentRating: row.current_rating,
       },
       guesses: [
@@ -1589,6 +1740,7 @@ async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: n
         u.public_id AS user_public_id,
         u.handle,
         u.display_name,
+        u.icon,
         l.public_id AS location_public_id,
         l.ordinal,
         g.public_id AS guess_public_id,
@@ -1635,6 +1787,7 @@ async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: n
         publicId: row.user_public_id,
         handle: row.handle,
         displayName: row.display_name,
+        icon: row.icon,
         currentRating: row.current_rating,
       },
       guess: {
@@ -2136,11 +2289,18 @@ function buildClearedSessionCookie() {
   return `${SESSION_COOKIE_NAME}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Max-Age=0; Path=/; SameSite=None; Secure`
 }
 
-function withCors(response: Response) {
+function withCors(request: Request, response: Response) {
   const headers = new Headers(response.headers)
-  headers.set("access-control-allow-origin", "*")
+  const origin = request.headers.get("origin")
+
+  if (origin && ALLOWED_CORS_ORIGINS.has(origin)) {
+    headers.set("access-control-allow-origin", origin)
+    headers.set("access-control-allow-credentials", "true")
+  }
+
   headers.set("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS")
   headers.set("access-control-allow-headers", "authorization,content-type,x-admin-token")
+  headers.append("vary", "Origin")
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

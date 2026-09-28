@@ -179,7 +179,7 @@ Request body:
 
 ```json
 {
-  "handle": "florian",
+  "handle": "congruleo",
   "password": "super-secret-password"
 }
 ```
@@ -191,8 +191,8 @@ Response `201`:
   "token": "opaque-session-token",
   "user": {
     "publicId": "usr_...",
-    "handle": "florian",
-    "displayName": "Florian",
+    "handle": "congruleo",
+    "displayName": "Congruleo",
     "icon": "😀",
     "currentRating": 1524,
     "hasPassword": true,
@@ -229,8 +229,8 @@ Response `200`:
 {
   "user": {
     "publicId": "usr_...",
-    "handle": "florian",
-    "displayName": "Florian",
+    "handle": "congruleo",
+    "displayName": "Congruleo",
     "icon": "😀",
     "currentRating": 1524,
     "hasPassword": true,
@@ -247,8 +247,8 @@ Request body:
 
 ```json
 {
-  "handle": "florian",
-  "displayName": "Florian",
+  "handle": "congruleo",
+  "displayName": "Congruleo",
   "icon": "😀",
   "password": "super-secret-password"
 }
@@ -267,8 +267,8 @@ Response `200`:
 {
   "user": {
     "publicId": "usr_...",
-    "handle": "florian",
-    "displayName": "Florian",
+    "handle": "congruleo",
+    "displayName": "Congruleo",
     "icon": "😀",
     "currentRating": 1524,
     "hasPassword": true,
@@ -313,8 +313,8 @@ Response `200`:
   },
   "user": {
     "publicId": "usr_...",
-    "handle": "florian",
-    "displayName": "Florian",
+    "handle": "congruleo",
+    "displayName": "Congruleo",
     "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
@@ -519,6 +519,7 @@ Response `201` on create, `200` on re-enable:
       "publicId": "usr_...",
       "handle": "friend_one",
       "displayName": "Friend One",
+      "icon": "🧭",
       "currentRating": 1524,
       "hasPassword": true,
       "createdAt": "2026-07-20 10:15:00"
@@ -551,6 +552,7 @@ Response `200`:
       "publicId": "usr_...",
       "handle": "friend_one",
       "displayName": "Friend One",
+      "icon": "🧭",
       "currentRating": 1524,
       "hasPassword": true,
       "createdAt": "2026-07-20 10:15:00"
@@ -577,11 +579,49 @@ Response `200`:
       "publicId": "usr_...",
       "handle": "friend_one",
       "displayName": "Friend One",
+      "icon": "🧭",
       "currentRating": 1524,
       "accepted": true,
       "friendedAt": "2026-07-20 11:00:00",
       "updatedAt": "2026-07-20 11:00:00",
       "friendPublicId": "frd_..."
+    }
+  ]
+}
+```
+
+### `GET /ratings/history`
+
+Returns the authenticated user's and accepted friends' rating development for the trailing 14 game days, aggregated by `game_date`.
+
+Response `200`:
+
+```json
+{
+  "days": ["2026-07-07", "2026-07-08", "2026-07-09"],
+  "series": [
+    {
+      "user": {
+        "publicId": "usr_...",
+        "handle": "congruleo",
+        "displayName": "Congruleo",
+        "icon": "🧭",
+        "currentRating": 1524
+      },
+      "points": [
+        {
+          "date": "2026-07-07",
+          "rating": 1508
+        },
+        {
+          "date": "2026-07-08",
+          "rating": 1516
+        },
+        {
+          "date": "2026-07-09",
+          "rating": 1524
+        }
+      ]
     }
   ]
 }
@@ -608,15 +648,15 @@ Response `200`:
       "finalizedAt": "2026-07-20 10:30:00",
       "user": {
         "publicId": "usr_...",
-        "handle": "florian",
-        "displayName": "Florian"
+        "handle": "congruleo",
+        "displayName": "Congruleo"
       }
     }
   ],
   "user": {
     "publicId": "usr_...",
-    "handle": "florian",
-    "displayName": "Florian",
+    "handle": "congruleo",
+    "displayName": "Congruleo",
     "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
@@ -651,6 +691,7 @@ Response `200`:
         "publicId": "usr_...",
         "handle": "friend_one",
         "displayName": "Friend One",
+        "icon": "🧭",
         "currentRating": 1524
       },
       "guesses": [
@@ -710,6 +751,7 @@ Response `200`:
         "publicId": "usr_...",
         "handle": "friend_one",
         "displayName": "Friend One",
+        "icon": "🧭",
         "currentRating": 1524
       },
       "guess": {
@@ -968,7 +1010,7 @@ Notes:
 
 Response `200`:
 
-```json
+````json
 {
   "reset": true,
   "processedPlays": 100,
@@ -987,7 +1029,7 @@ Authentication:
 
 ```http
 x-admin-token: <ADMIN_SEED_TOKEN>
-```
+````
 
 Request body: none
 
@@ -1003,7 +1045,8 @@ Possible errors:
 
 - `401` missing or invalid admin token
 - `500` if `ADMIN_SEED_TOKEN` is not configured
-```
+
+````
 
 ## Suggested frontend integration order
 
@@ -1022,7 +1065,7 @@ Possible errors:
 
 ```bash
 npm install
-```
+````
 
 2. Apply local migrations:
 
