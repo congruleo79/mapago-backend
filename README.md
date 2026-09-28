@@ -1,6 +1,10 @@
+# MapAgo
+
+Play MapAgo - A daily history map guessing quiz at [mapago.date](https://mapago.date)
+
 # mapago-backend
 
-Cloudflare Worker backend for the daily map guessing game.
+Cloudflare Worker backend for a daily map guessing game.
 
 This document is written for frontend integration. It describes the auth flow, request and response shapes, and the runtime rules enforced by the API.
 
@@ -1095,4 +1099,5 @@ npm run deploy
 ```bash
 npm run ratings:backfill -- --reset --limit 100 --api-url https://mapago-backend.map-ago.workers.dev/admin/ratings/backfill
 ```
-*** Delete File: /home/florian/Documents/mapago-backend/scripts/populate-empty-icons.ts
+
+\*\*\* Delete File: /home/florian/Documents/mapago-backend/scripts/populate-empty-icons.ts
