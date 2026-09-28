@@ -36,7 +36,7 @@ Recommended frontend flow:
 1. If the client has no token, call `POST /sessions/guest`.
 2. Persist the returned token locally.
 3. Send that token on every authenticated request until cookie-based auth is fully rolled out on your clients.
-4. If the player wants a stable account, call `PATCH /me` with `handle`, `displayName`, `icon`, and optionally `password`.
+4. If the player wants a stable account, call `PATCH /me` with `handle`, `displayName`, `icon`, `color`, and optionally `password`.
 5. Returning players can call `POST /sessions/login` with `handle` and `password` to get a fresh token.
 
 Notes:
@@ -158,6 +158,8 @@ Response `201`:
     "publicId": "usr_...",
     "handle": "guest_ab12cd34",
     "displayName": "Guest ab12cd34",
+    "icon": "🧭",
+    "color": "#2A9D8F",
     "currentRating": 1500,
     "hasPassword": false,
     "createdAt": "2026-07-20 10:15:00"
@@ -194,6 +196,7 @@ Response `201`:
     "handle": "congruleo",
     "displayName": "Congruleo",
     "icon": "😀",
+    "color": "#2A9D8F",
     "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
@@ -232,6 +235,7 @@ Response `200`:
     "handle": "congruleo",
     "displayName": "Congruleo",
     "icon": "😀",
+    "color": "#2A9D8F",
     "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
@@ -250,6 +254,7 @@ Request body:
   "handle": "congruleo",
   "displayName": "Congruleo",
   "icon": "😀",
+  "color": "#2A9D8F",
   "password": "super-secret-password"
 }
 ```
@@ -258,7 +263,8 @@ Rules:
 
 - `handle` must match `^[a-z0-9_]{3,24}$`
 - `displayName` must be 1 to 50 chars
-- `icon` must be a single emoji
+- `icon` must be a single character
+- `color` must be at most 32 chars
 - `password` must be at least 8 chars
 
 Response `200`:
@@ -270,6 +276,7 @@ Response `200`:
     "handle": "congruleo",
     "displayName": "Congruleo",
     "icon": "😀",
+    "color": "#2A9D8F",
     "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
@@ -279,7 +286,7 @@ Response `200`:
 
 Possible errors:
 
-- `400` for invalid handle, display name, icon, or password
+- `400` for invalid handle, display name, icon, color, or password
 - `409` if the handle is already taken
 
 ### `GET /games/today`
@@ -315,6 +322,8 @@ Response `200`:
     "publicId": "usr_...",
     "handle": "congruleo",
     "displayName": "Congruleo",
+    "icon": "😀",
+    "color": "#2A9D8F",
     "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
@@ -520,6 +529,7 @@ Response `201` on create, `200` on re-enable:
       "handle": "friend_one",
       "displayName": "Friend One",
       "icon": "🧭",
+      "color": "#2A9D8F",
       "currentRating": 1524,
       "hasPassword": true,
       "createdAt": "2026-07-20 10:15:00"
@@ -553,6 +563,7 @@ Response `200`:
       "handle": "friend_one",
       "displayName": "Friend One",
       "icon": "🧭",
+      "color": "#2A9D8F",
       "currentRating": 1524,
       "hasPassword": true,
       "createdAt": "2026-07-20 10:15:00"
@@ -580,6 +591,7 @@ Response `200`:
       "handle": "friend_one",
       "displayName": "Friend One",
       "icon": "🧭",
+      "color": "#2A9D8F",
       "currentRating": 1524,
       "accepted": true,
       "friendedAt": "2026-07-20 11:00:00",
@@ -606,6 +618,7 @@ Response `200`:
         "handle": "congruleo",
         "displayName": "Congruleo",
         "icon": "🧭",
+        "color": "#2A9D8F",
         "currentRating": 1524
       },
       "points": [
@@ -657,6 +670,8 @@ Response `200`:
     "publicId": "usr_...",
     "handle": "congruleo",
     "displayName": "Congruleo",
+    "icon": "😀",
+    "color": "#2A9D8F",
     "currentRating": 1524,
     "hasPassword": true,
     "createdAt": "2026-07-20 10:15:00"
@@ -692,6 +707,7 @@ Response `200`:
         "handle": "friend_one",
         "displayName": "Friend One",
         "icon": "🧭",
+        "color": "#2A9D8F",
         "currentRating": 1524
       },
       "guesses": [
@@ -752,6 +768,7 @@ Response `200`:
         "handle": "friend_one",
         "displayName": "Friend One",
         "icon": "🧭",
+        "color": "#2A9D8F",
         "currentRating": 1524
       },
       "guess": {
@@ -1021,33 +1038,6 @@ Response `200`:
   }
 }
 
-### `POST /admin/users/icons/populate-empty`
-
-Assigns a random curated emoji icon to every user whose `icon` field is an empty string.
-
-Authentication:
-
-```http
-x-admin-token: <ADMIN_SEED_TOKEN>
-````
-
-Request body: none
-
-Response `200`:
-
-```json
-{
-  "updatedUsers": 42
-}
-```
-
-Possible errors:
-
-- `401` missing or invalid admin token
-- `500` if `ADMIN_SEED_TOKEN` is not configured
-
-````
-
 ## Suggested frontend integration order
 
 1. On app boot, ensure a token exists with `POST /sessions/guest` if needed.
@@ -1083,7 +1073,6 @@ npm run dev
 
 ```bash
 npm run ratings:backfill -- --reset --limit 100
-npm run icons:populate-empty
 ```
 
 ## Deployment notes
@@ -1105,5 +1094,5 @@ npm run deploy
 
 ```bash
 npm run ratings:backfill -- --reset --limit 100 --api-url https://mapago-backend.map-ago.workers.dev/admin/ratings/backfill
-npm run icons:populate-empty -- --api-url https://mapago-backend.map-ago.workers.dev/admin/users/icons/populate-empty
 ```
+*** Delete File: /home/florian/Documents/mapago-backend/scripts/populate-empty-icons.ts

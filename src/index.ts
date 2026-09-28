@@ -6,6 +6,7 @@ type UserRow = {
   handle: string
   display_name: string
   icon: string
+  color: string
   password_hash: string | null
   current_rating: number
   created_at: string
@@ -72,6 +73,7 @@ type SocialGuessRow = LeaderboardRow & {
   user_id: number
   current_rating: number
   icon: string
+  color: string
   location_public_id: string
   ordinal: number
   guess_public_id: string
@@ -91,6 +93,7 @@ type SocialLocationGuessRow = {
   handle: string
   display_name: string
   icon: string
+  color: string
   location_public_id: string
   ordinal: number
   guess_public_id: string
@@ -121,6 +124,7 @@ type SessionWithUserRow = SessionRow & {
   handle: string
   display_name: string
   icon: string
+  color: string
   password_hash: string | null
   current_rating: number
   user_public_id: string
@@ -144,6 +148,7 @@ type FriendListRow = {
   handle: string
   display_name: string
   icon: string
+  color: string
   current_rating: number
   accepted: number
   created_at: string
@@ -156,6 +161,7 @@ type RatedUserRow = {
   handle: string
   display_name: string
   icon: string
+  color: string
   current_rating: number
 }
 
@@ -262,6 +268,7 @@ const GUEST_ICON_TRAVEL_EMOJIS = ["🚲", "🛵", "🚂", "🚠", "⛵", "🛶",
 const GUEST_ICON_NATURE_EMOJIS = ["🌵", "🌴", "🌻", "🍄", "🌙", "⭐", "🔥", "🌈"]
 const GUEST_ICON_ACTIVITY_EMOJIS = ["⚽", "🎾", "🎯", "🎲", "🎸", "🎧", "🎨", "🎈"]
 const GUEST_ICON_EMOJIS = [...GUEST_ICON_FOOD_EMOJIS, ...GUEST_ICON_TRAVEL_EMOJIS, ...GUEST_ICON_NATURE_EMOJIS, ...GUEST_ICON_ACTIVITY_EMOJIS]
+const GUEST_COLORS = ["#E76F51", "#F4A261", "#E9C46A", "#2A9D8F", "#264653", "#457B9D", "#6D597A", "#B56576"]
 
 export default {
   async fetch(request: Request, env: AppEnv): Promise<Response> {
@@ -310,12 +317,6 @@ export default {
         return withCors(request, json({ reset: body.reset, ...result }))
       }
 
-      if (request.method === "POST" && pathname === "/admin/users/icons/populate-empty") {
-        await requireAdminSeedToken(request, env)
-        const result = await populateEmptyUserIcons(env)
-        return withCors(request, json(result))
-      }
-
       if (request.method === "POST" && pathname === "/sessions/guest") {
         const session = await createGuestSession(env)
         const { expiresAt, ...body } = session
@@ -345,7 +346,7 @@ export default {
 
       if (request.method === "PATCH" && pathname === "/me") {
         const session = await requireSession(request, env)
-        const body = await readJson<{ handle?: string; displayName?: string; icon?: string; password?: string }>(request)
+        const body = await readJson<{ handle?: string; displayName?: string; icon?: string; color?: string; password?: string }>(request)
         const user = await updateCurrentUser(env, session.user, body)
         return withCors(request, withSessionCookie(json({ user: serializeUser(user) }), session.token, session.session.expires_at))
       }
@@ -460,9 +461,10 @@ async function createGuestSession(env: AppEnv) {
   const handle = `guest_${handleSuffix}`
   const displayName = `Guest ${handleSuffix}`
   const icon = pickRandomGuestIcon()
+  const color = pickRandomGuestColor()
   const expiresAt = addDays(new Date(), SESSION_DURATION_DAYS).toISOString()
 
-  const userInsert = env.DB.prepare(`INSERT INTO users (public_id, handle, display_name, icon) VALUES (?, ?, ?, ?)`).bind(userPublicId, handle, displayName, icon)
+  const userInsert = env.DB.prepare(`INSERT INTO users (public_id, handle, display_name, icon, color) VALUES (?, ?, ?, ?, ?)`).bind(userPublicId, handle, displayName, icon, color)
 
   await userInsert.run()
   const user = requireFound(await first<UserRow>(env.DB.prepare(`SELECT * FROM users WHERE public_id = ?`).bind(userPublicId)), 500, "Failed to load newly created user")
@@ -504,7 +506,7 @@ async function createPasswordSession(request: Request, env: AppEnv) {
   }
 }
 
-async function updateCurrentUser(env: AppEnv, user: UserRow, body: { handle?: string; displayName?: string; icon?: string; password?: string }) {
+async function updateCurrentUser(env: AppEnv, user: UserRow, body: { handle?: string; displayName?: string; icon?: string; color?: string; password?: string }) {
   const updates: string[] = []
   const values: Array<string | null> = []
 
@@ -526,6 +528,11 @@ async function updateCurrentUser(env: AppEnv, user: UserRow, body: { handle?: st
   if (body.icon !== undefined) {
     updates.push(`icon = ?`)
     values.push(normalizeUserIcon(body.icon))
+  }
+
+  if (body.color !== undefined) {
+    updates.push(`color = ?`)
+    values.push(normalizeUserColor(body.color))
   }
 
   if (body.password !== undefined) {
@@ -586,6 +593,7 @@ async function findSession(request: Request, env: AppEnv, renew: boolean): Promi
         handle: row.handle,
         display_name: row.display_name,
         icon: row.icon,
+        color: row.color,
         password_hash: row.password_hash,
         current_rating: row.current_rating,
         created_at: row.user_created_at,
@@ -673,6 +681,7 @@ async function getSessionRowByToken(env: AppEnv, token: string) {
         u.handle,
         u.display_name,
         u.icon,
+        u.color,
         u.password_hash,
         u.current_rating,
         u.public_id AS user_public_id,
@@ -1022,18 +1031,6 @@ async function resetRatings(env: AppEnv) {
   await env.DB.batch([env.DB.prepare(`DELETE FROM user_rating_events`), env.DB.prepare(`UPDATE users SET current_rating = ?`).bind(INITIAL_RATING)])
 }
 
-async function populateEmptyUserIcons(env: AppEnv) {
-  const users = await all<{ id: number }>(env.DB.prepare(`SELECT id FROM users WHERE trim(icon) = ''`))
-
-  if (users.length === 0) {
-    return { updatedUsers: 0 }
-  }
-
-  await env.DB.batch(users.map((user) => env.DB.prepare(`UPDATE users SET icon = ? WHERE id = ?`).bind(pickRandomGuestIcon(), user.id)))
-
-  return { updatedUsers: users.length }
-}
-
 async function createFollow(env: AppEnv, followerUserId: number, followedUserHandle: string) {
   const normalizedHandle = normalizeHandle(followedUserHandle)
   const followed = await first<UserRow>(env.DB.prepare(`SELECT * FROM users WHERE handle = ?`).bind(normalizedHandle))
@@ -1197,6 +1194,7 @@ async function listFriends(env: AppEnv, currentUserId: number) {
         u.handle,
         u.display_name,
         u.icon,
+        u.color,
         u.current_rating,
         CASE WHEN f.lower_user_id = ? THEN f.lower_user_accepted ELSE f.higher_user_accepted END AS accepted,
         f.created_at,
@@ -1214,6 +1212,7 @@ async function listFriends(env: AppEnv, currentUserId: number) {
     handle: row.handle,
     displayName: row.display_name,
     icon: row.icon,
+    color: row.color,
     currentRating: row.current_rating,
     accepted: row.accepted === 1,
     friendedAt: row.created_at,
@@ -1297,6 +1296,7 @@ async function getSocialRatingHistory(env: AppEnv, currentUserId: number) {
           handle: user.handle,
           displayName: user.display_name,
           icon: user.icon,
+          color: user.color,
           currentRating: user.current_rating,
         },
         points: days.map((date) => {
@@ -1317,6 +1317,7 @@ async function listRatedUsersForHistory(env: AppEnv, currentUserId: number) {
         u.handle,
         u.display_name,
         u.icon,
+        u.color,
         u.current_rating
        FROM users u
        WHERE u.id = ?
@@ -1327,6 +1328,7 @@ async function listRatedUsersForHistory(env: AppEnv, currentUserId: number) {
         u.handle,
         u.display_name,
         u.icon,
+        u.color,
         u.current_rating
        FROM friends f
        JOIN users u ON u.id = CASE WHEN f.lower_user_id = ? THEN f.higher_user_id ELSE f.lower_user_id END
@@ -1637,6 +1639,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
         u.handle,
         u.display_name,
         u.icon,
+        u.color,
         u.current_rating,
         l.public_id AS location_public_id,
         l.ordinal,
@@ -1667,7 +1670,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
       totalScore: number
       finalizedAt: string
       ratingChange: number
-      user: { publicId: string; handle: string; displayName: string; icon: string; currentRating: number }
+      user: { publicId: string; handle: string; displayName: string; icon: string; color: string; currentRating: number }
       guesses: Array<{
         locationPublicId: string
         ordinal: number
@@ -1705,6 +1708,7 @@ async function getSocialGuesses(env: AppEnv, gameId: number, userId: number) {
         handle: row.handle,
         displayName: row.display_name,
         icon: row.icon,
+        color: row.color,
         currentRating: row.current_rating,
       },
       guesses: [
@@ -1741,6 +1745,7 @@ async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: n
         u.handle,
         u.display_name,
         u.icon,
+        u.color,
         l.public_id AS location_public_id,
         l.ordinal,
         g.public_id AS guess_public_id,
@@ -1788,6 +1793,7 @@ async function getSocialGuessesForOrdinal(env: AppEnv, gameId: number, userId: n
         handle: row.handle,
         displayName: row.display_name,
         icon: row.icon,
+        color: row.color,
         currentRating: row.current_rating,
       },
       guess: {
@@ -1807,6 +1813,7 @@ function serializeUser(user: UserRow) {
     handle: user.handle,
     displayName: user.display_name,
     icon: user.icon,
+    color: user.color,
     currentRating: user.current_rating,
     hasPassword: Boolean(user.password_hash),
     createdAt: user.created_at,
@@ -1817,25 +1824,34 @@ function normalizeUserIcon(value: string) {
   const trimmed = value.trim()
 
   if (trimmed.length === 0) {
-    throw httpError(400, "Icon must be a single emoji")
+    throw httpError(400, "Icon must be a single character")
   }
 
   const graphemes = Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(trimmed))
   if (graphemes.length !== 1) {
-    throw httpError(400, "Icon must be a single emoji")
+    throw httpError(400, "Icon must be a single character")
   }
 
-  const icon = graphemes[0]?.segment ?? ""
-  if (!/[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(icon)) {
-    throw httpError(400, "Icon must be a single emoji")
+  return graphemes[0]?.segment ?? ""
+}
+
+function normalizeUserColor(value: string) {
+  const trimmed = value.trim()
+  if (trimmed.length > 32) {
+    throw httpError(400, "Color must be at most 32 characters")
   }
 
-  return icon
+  return trimmed
 }
 
 function pickRandomGuestIcon() {
   const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
   return GUEST_ICON_EMOJIS[randomValue % GUEST_ICON_EMOJIS.length] as string
+}
+
+function pickRandomGuestColor() {
+  const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
+  return GUEST_COLORS[randomValue % GUEST_COLORS.length] as string
 }
 
 function serializePlay(rows: PlayGuessRow[], ratingChange = 0) {

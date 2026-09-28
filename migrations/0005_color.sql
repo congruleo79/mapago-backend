@@ -1,0 +1,3 @@
+PRAGMA foreign_keys = ON;
+
+ALTER TABLE users ADD COLUMN color TEXT NOT NULL DEFAULT '';
