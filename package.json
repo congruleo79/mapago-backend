@@ -13,6 +13,7 @@
     "ai:select-and-seed": "node scripts/ai/select-and-seed.mjs",
     "seed:locations": "node --experimental-strip-types scripts/seed-locations.ts",
     "ratings:backfill": "node --experimental-strip-types scripts/backfill-ratings.ts",
+    "icons:populate-empty": "node --experimental-strip-types scripts/populate-empty-icons.ts",
     "ai:blacklist": "node scripts/ai/blacklist.mjs",
     "ai:validate": "node scripts/ai/validate.mjs",
     "ai:validate:locations": "node scripts/ai/validate-locations.mjs",

@@ -5,6 +5,7 @@ type UserRow = {
   public_id: string
   handle: string
   display_name: string
+  icon: string
   password_hash: string | null
   current_rating: number
   created_at: string
@@ -117,6 +118,7 @@ type RecentLocationRow = {
 type SessionWithUserRow = SessionRow & {
   handle: string
   display_name: string
+  icon: string
   password_hash: string | null
   current_rating: number
   user_public_id: string
@@ -239,6 +241,11 @@ const RATING_K_FACTOR = 24
 const RATING_SCALE = 400
 const RATING_MARGIN_LOG_DIVISOR = 4
 const RATING_MAX_MARGIN_MULTIPLIER = 3
+const GUEST_ICON_FOOD_EMOJIS = ["🍎", "🍉", "🍓", "🍒", "🍍", "🥥", "🥨", "🧁"]
+const GUEST_ICON_TRAVEL_EMOJIS = ["🚲", "🛵", "🚂", "🚠", "⛵", "🛶", "🗺️", "🧭"]
+const GUEST_ICON_NATURE_EMOJIS = ["🌵", "🌴", "🌻", "🍄", "🌙", "⭐", "🔥", "🌈"]
+const GUEST_ICON_ACTIVITY_EMOJIS = ["⚽", "🎾", "🎯", "🎲", "🎸", "🎧", "🎨", "🎈"]
+const GUEST_ICON_EMOJIS = [...GUEST_ICON_FOOD_EMOJIS, ...GUEST_ICON_TRAVEL_EMOJIS, ...GUEST_ICON_NATURE_EMOJIS, ...GUEST_ICON_ACTIVITY_EMOJIS]
 
 export default {
   async fetch(request: Request, env: AppEnv): Promise<Response> {
@@ -287,6 +294,12 @@ export default {
         return withCors(json({ reset: body.reset, ...result }))
       }
 
+      if (request.method === "POST" && pathname === "/admin/users/icons/populate-empty") {
+        await requireAdminSeedToken(request, env)
+        const result = await populateEmptyUserIcons(env)
+        return withCors(json(result))
+      }
+
       if (request.method === "POST" && pathname === "/sessions/guest") {
         const session = await createGuestSession(env)
         const { expiresAt, ...body } = session
@@ -316,7 +329,7 @@ export default {
 
       if (request.method === "PATCH" && pathname === "/me") {
         const session = await requireSession(request, env)
-        const body = await readJson<{ handle?: string; displayName?: string; password?: string }>(request)
+        const body = await readJson<{ handle?: string; displayName?: string; icon?: string; password?: string }>(request)
         const user = await updateCurrentUser(env, session.user, body)
         return withCors(withSessionCookie(json({ user: serializeUser(user) }), session.token, session.session.expires_at))
       }
@@ -424,9 +437,10 @@ async function createGuestSession(env: AppEnv) {
   const handleSuffix = crypto.randomUUID().slice(0, 8)
   const handle = `guest_${handleSuffix}`
   const displayName = `Guest ${handleSuffix}`
+  const icon = pickRandomGuestIcon()
   const expiresAt = addDays(new Date(), SESSION_DURATION_DAYS).toISOString()
 
-  const userInsert = env.DB.prepare(`INSERT INTO users (public_id, handle, display_name) VALUES (?, ?, ?)`).bind(userPublicId, handle, displayName)
+  const userInsert = env.DB.prepare(`INSERT INTO users (public_id, handle, display_name, icon) VALUES (?, ?, ?, ?)`).bind(userPublicId, handle, displayName, icon)
 
   await userInsert.run()
   const user = requireFound(await first<UserRow>(env.DB.prepare(`SELECT * FROM users WHERE public_id = ?`).bind(userPublicId)), 500, "Failed to load newly created user")
@@ -468,7 +482,7 @@ async function createPasswordSession(request: Request, env: AppEnv) {
   }
 }
 
-async function updateCurrentUser(env: AppEnv, user: UserRow, body: { handle?: string; displayName?: string; password?: string }) {
+async function updateCurrentUser(env: AppEnv, user: UserRow, body: { handle?: string; displayName?: string; icon?: string; password?: string }) {
   const updates: string[] = []
   const values: Array<string | null> = []
 
@@ -485,6 +499,11 @@ async function updateCurrentUser(env: AppEnv, user: UserRow, body: { handle?: st
     }
     updates.push(`display_name = ?`)
     values.push(displayName)
+  }
+
+  if (body.icon !== undefined) {
+    updates.push(`icon = ?`)
+    values.push(normalizeUserIcon(body.icon))
   }
 
   if (body.password !== undefined) {
@@ -544,6 +563,7 @@ async function findSession(request: Request, env: AppEnv, renew: boolean): Promi
         public_id: row.user_public_id,
         handle: row.handle,
         display_name: row.display_name,
+        icon: row.icon,
         password_hash: row.password_hash,
         current_rating: row.current_rating,
         created_at: row.user_created_at,
@@ -630,6 +650,7 @@ async function getSessionRowByToken(env: AppEnv, token: string) {
         s.created_at,
         u.handle,
         u.display_name,
+        u.icon,
         u.password_hash,
         u.current_rating,
         u.public_id AS user_public_id,
@@ -977,6 +998,18 @@ async function backfillRatingsBatch(env: AppEnv, cursor: RatingBackfillCursor | 
 
 async function resetRatings(env: AppEnv) {
   await env.DB.batch([env.DB.prepare(`DELETE FROM user_rating_events`), env.DB.prepare(`UPDATE users SET current_rating = ?`).bind(INITIAL_RATING)])
+}
+
+async function populateEmptyUserIcons(env: AppEnv) {
+  const users = await all<{ id: number }>(env.DB.prepare(`SELECT id FROM users WHERE trim(icon) = ''`))
+
+  if (users.length === 0) {
+    return { updatedUsers: 0 }
+  }
+
+  await env.DB.batch(users.map((user) => env.DB.prepare(`UPDATE users SET icon = ? WHERE id = ?`).bind(pickRandomGuestIcon(), user.id)))
+
+  return { updatedUsers: users.length }
 }
 
 async function createFollow(env: AppEnv, followerUserId: number, followedUserHandle: string) {
@@ -1620,10 +1653,36 @@ function serializeUser(user: UserRow) {
     publicId: user.public_id,
     handle: user.handle,
     displayName: user.display_name,
+    icon: user.icon,
     currentRating: user.current_rating,
     hasPassword: Boolean(user.password_hash),
     createdAt: user.created_at,
   }
+}
+
+function normalizeUserIcon(value: string) {
+  const trimmed = value.trim()
+
+  if (trimmed.length === 0) {
+    throw httpError(400, "Icon must be a single emoji")
+  }
+
+  const graphemes = Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(trimmed))
+  if (graphemes.length !== 1) {
+    throw httpError(400, "Icon must be a single emoji")
+  }
+
+  const icon = graphemes[0]?.segment ?? ""
+  if (!/[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(icon)) {
+    throw httpError(400, "Icon must be a single emoji")
+  }
+
+  return icon
+}
+
+function pickRandomGuestIcon() {
+  const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
+  return GUEST_ICON_EMOJIS[randomValue % GUEST_ICON_EMOJIS.length] as string
 }
 
 function serializePlay(rows: PlayGuessRow[], ratingChange = 0) {
